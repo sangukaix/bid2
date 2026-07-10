@@ -1,26 +1,19 @@
-@import "tailwindcss";
+﻿@import "tailwindcss"; /* Tailwind CSS 기능을 이 파일에서 사용할 수 있게 불러옵니다. */
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+:root { /* 사이트 전체에서 공통으로 사용할 CSS 변수들을 정의하는 영역입니다. */
+  --background: #ffffff; /* 기본 배경색입니다. */
+  --foreground: #171717; /* 기본 글자색입니다. */
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+@theme inline { /* Tailwind v4에서 CSS 변수를 Tailwind 색상/폰트 이름으로 연결하는 설정입니다. */
+  --color-background: var(--background); /* Tailwind에서 bg-background처럼 쓸 수 있는 색상입니다. */
+  --color-foreground: var(--foreground); /* Tailwind에서 text-foreground처럼 쓸 수 있는 색상입니다. */
+  --font-sans: var(--font-geist-sans); /* layout.tsx에서 불러온 기본 sans 폰트를 Tailwind에 연결합니다. */
+  --font-mono: var(--font-geist-mono); /* layout.tsx에서 불러온 monospace 폰트를 Tailwind에 연결합니다. */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+body { /* 모든 페이지의 body 태그에 적용되는 기본 스타일입니다. */
+  background: var(--background); /* 위에서 만든 --background 값을 실제 배경색으로 사용합니다. */
+  color: var(--foreground); /* 위에서 만든 --foreground 값을 실제 글자색으로 사용합니다. */
+  font-family: Arial, Helvetica, sans-serif; /* 기본 글꼴을 지정합니다. */
 }
