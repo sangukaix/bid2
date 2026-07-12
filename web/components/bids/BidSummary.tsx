@@ -1,11 +1,17 @@
-const summaryItems = [ // 나중에 API 결과 개수로 교체할 요약 항목
-  { label: "전체 공고", count: 0 },
-  { label: "물품", count: 0 },
-  { label: "용역", count: 0 },
-  { label: "공사", count: 0 },
-];
+import type { BidSummaryData } from "@/types/bid";
 
-export default function BidSummary() { // 공고 유형별 개수를 카드 형태로 표시
+type BidSummaryProps = {
+  summary: BidSummaryData;
+};
+
+export default function BidSummary({ summary }: BidSummaryProps) { // 공고 유형별 개수를 카드 형태로 표시
+  const summaryItems = [
+    { label: "전체 공고", count: summary.total },
+    { label: "물품", count: summary.goods },
+    { label: "용역", count: summary.services },
+    { label: "공사", count: summary.construction },
+  ];
+
   return (
     <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="입찰공고 요약">
       {summaryItems.map((item) => ( // 배열의 항목 수만큼 같은 모양의 카드를 반복 생성
