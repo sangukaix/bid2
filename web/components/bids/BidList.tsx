@@ -14,6 +14,18 @@ const emptySummary = {
   construction: 0,
 };
 
+function formatLastUpdatedAt(value: string | null | undefined) {
+  if (!value) {
+    return "아직 수집된 기록이 없습니다.";
+  }
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Seoul",
+  }).format(new Date(value));
+}
+
 async function fetchBids(filters: BidSearchParams) {
   const apiBaseUrl = process.env.BID_API_BASE_URL ?? "http://127.0.0.1:8000";
   const params = new URLSearchParams({
@@ -52,9 +64,14 @@ export default async function BidList({ filters }: BidListProps) { // 입찰 목
   const { data, error } = await fetchBids(filters);
 
   return (
-    <div className="mt-6 space-y-5">
-      <BidSummary summary={data?.summary ?? emptySummary} />
-      <BidFilters filters={filters} />
+    <div className="mt-6 space-y-4">
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <BidSummary summary={data?.summary ?? emptySummary} />
+        <BidFilters
+          filters={filters}
+          lastUpdatedAt={formatLastUpdatedAt(data?.last_updated_at)}
+        />
+      </div>
       <BidTable data={data} error={error} filters={filters} />
     </div>
   );

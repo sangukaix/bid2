@@ -1,84 +1,225 @@
-import Link from "next/link";
+"use client"; // 회사 검색 조건과 버튼 상태를 브라우저에서 관리
 
+import { FormEvent, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+
+import { parseRegions, REGION_OPTIONS } from "@/components/ui/RegionSelector";
 import type { BidSearchParams } from "@/types/bid";
+import type { CompanyProfileData } from "@/types/company";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 type BidFiltersProps = {
   filters: BidSearchParams;
+  lastUpdatedAt: string;
 };
 
-export default function BidFilters({ filters }: BidFiltersProps) { // 공고명과 조건으로 목록을 검색하는 화면 영역
+function parseKeywords(value = "") {
+  return value.split(",").map((keyword) => keyword.trim()).filter(Boolean);
+}
+
+export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) {
+  const router = useRouter();
+  const [query, setQuery] = useState(filters.q ?? "");
+  const [keywords, setKeywords] = useState(() => parseKeywords(filters.keywords));
+  const [regions, setRegions] = useState(() => parseRegions(filters.regions ?? ""));
+  const [savedKeywords, setSavedKeywords] = useState<string[]>([]); // 회사 정보에 저장된 원래 키워드
+  const [savedRegions, setSavedRegions] = useState<string[]>([]); // 회사 정보에 저장된 원래 희망지역
+  const [keywordInput, setKeywordInput] = useState("");
+  const [isSyncing, setIsSyncing] = useState(false); // 나라장터 업데이트 진행 상태
+  const [syncError, setSyncError] = useState(""); // 업데이트 실패 안내
+
+  useEffect(() => {
+    const token = localStorage.getItem("auth_token");
+    if (!token) return;
+
+    async function loadCompanyConditions() {
+      const response = await fetch(`${API_BASE_URL}/api/company-profile/`, {
+        headers: { Authorization: `Token ${token}` },
+      });
+      if (!response.ok) return;
+
+      const data = (await response.json()) as { profile: CompanyProfileData | null };
+      if (!data.profile) return;
+
+      const companyKeywords = parseKeywords(data.profile.preferred_keywords);
+      const companyRegions = parseRegions(data.profile.preferred_region);
+      const params = new URLSearchParams();
+
+      setSavedKeywords(companyKeywords);
+      setSavedRegions(companyRegions);
+
+      if (filters.keywords !== undefined || filters.regions !== undefined) return;
+
+      setKeywords(companyKeywords);
+      setRegions(companyRegions);
+      params.set("keywords", companyKeywords.join(","));
+      params.set("regions", companyRegions.join(","));
+      router.replace(`/dashBoard/bidList?${params}`); // 회사 조건으로 첫 검색 실행
+
+    }
+
+    loadCompanyConditions(); // 최초 진입 시 회사 정보의 검색 조건 불러오기
+  }, [filters.keywords, filters.regions, router]);
+
+  function addKeyword() {
+    const keyword = keywordInput.trim();
+    if (keyword && !keywords.includes(keyword)) setKeywords([...keywords, keyword]);
+    setKeywordInput("");
+  }
+
+  function addRegion(region: string) {
+    if (region && !regions.includes(region)) {
+      setRegions([...regions, region]); // 지역을 고르는 즉시 현재 검색 조건에 추가
+    }
+  }
+
+  function loadSavedKeywords() {
+    setQuery("");
+    setKeywords(savedKeywords); // 회사 정보의 키워드를 현재 검색 조건에 복사
+  }
+
+  function loadSavedRegions() {
+    setQuery("");
+    setRegions(savedRegions); // 회사 정보의 희망지역을 현재 검색 조건에 복사
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const params = new URLSearchParams();
+
+    if (query.trim()) {
+      setKeywords([]);
+      setRegions([]);
+      params.set("q", query.trim());
+      params.set("keywords", "");
+      params.set("regions", ""); // 공고명을 입력하면 회사 조건을 제외하고 제목만 검색
+    } else {
+      params.set("keywords", keywords.join(","));
+      params.set("regions", regions.join(","));
+    }
+    if (filters.business_type) params.set("business_type", filters.business_type);
+    if (filters.deadline_sort) params.set("deadline_sort", filters.deadline_sort);
+
+    router.push(`/dashBoard/bidList${params.size ? `?${params}` : ""}`);
+  }
+
+  function resetFilters() {
+    setQuery("");
+    setKeywords([]);
+    setRegions([]);
+    router.push("/dashBoard/bidList?keywords=&regions=");
+  }
+
+  async function refreshBidNotices() {
+    const token = localStorage.getItem("auth_token");
+    if (!token) {
+      setSyncError("로그인 후 공고를 업데이트할 수 있습니다.");
+      return;
+    }
+
+    setIsSyncing(true);
+    setSyncError("");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/bids/sync/`, {
+        method: "POST",
+        headers: { Authorization: `Token ${token}` },
+      });
+
+      if (!response.ok) throw new Error();
+      router.refresh(); // 업데이트된 DB 목록과 마지막 업데이트 시간 다시 요청
+    } catch {
+      setSyncError("공고 업데이트에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
   return (
-    <form action="/dashBoard/bidList" className="rounded-lg border border-slate-200 bg-white p-5" method="get">
-      <div> {/* 검색어 입력 영역 */}
-        <label className="text-sm font-semibold text-slate-800" htmlFor="bid-search">
-          공고 검색
-        </label>
-        <input
-          className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2.5 text-sm outline-none focus:border-blue-500"
-          id="bid-search"
-          name="q"
-          defaultValue={filters.q}
-          placeholder="공고명 또는 발주기관을 입력해주세요."
-          type="search"
-        />
-      </div>
-
-      <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-5"> {/* 화면 크기에 따라 필터 배치를 변경 */}
-        <label className="block">
-          <span className="text-sm font-medium text-slate-700">업무 구분</span>
-          <select className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500" defaultValue={filters.business_type} name="business_type">
-            <option value="">전체</option>
-            <option value="물품">물품</option>
-            <option value="용역">용역</option>
-            <option value="공사">공사</option>
-          </select>
-        </label>
-
-        <label className="block">
-          <span className="text-sm font-medium text-slate-700">참가 지역</span>
-          <select className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500" defaultValue={filters.region} name="region">
-            <option value="">전체 지역</option>
-            <option value="seoul">서울</option>
-            <option value="gyeonggi">경기</option>
-            <option value="incheon">인천</option>
-          </select>
-        </label>
-
-        <label className="block">
-          <span className="text-sm font-medium text-slate-700">마감 기간</span>
-          <select className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500" defaultValue={filters.deadline_days} name="deadline_days">
-            <option value="">전체 기간</option>
-            <option value="0">오늘 마감</option>
-            <option value="3">3일 이내</option>
-            <option value="7">7일 이내</option>
-            <option value="30">30일 이내</option>
-          </select>
-        </label>
-
-        <label className="block">
-          <span className="text-sm font-medium text-slate-700">마감 상태</span>
-          <select className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500" defaultValue={filters.deadline_status} name="deadline_status">
-            <option value="">전체 상태</option>
-            <option value="active">유효</option>
-            <option value="review">마감일 확인 필요</option>
-          </select>
-        </label>
-
-        <div className="flex items-end gap-2"> {/* 초기화와 검색 명령 버튼 영역 */}
-          <Link
-            className="flex-1 rounded-md border border-slate-300 px-4 py-2.5 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
-            href="/dashBoard/bidList"
-          >
-            초기화
-          </Link>
+    <form className="p-5" onSubmit={handleSubmit}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <p className="text-xs text-slate-500">마지막 업데이트: {lastUpdatedAt}</p>
           <button
-            className="flex-1 rounded-md bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
-            type="submit"
+            aria-label="나라장터 공고 새로고침"
+            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-base text-slate-500 transition-colors hover:bg-slate-100 hover:text-blue-600 disabled:text-slate-300"
+            disabled={isSyncing}
+            onClick={refreshBidNotices}
+            title="나라장터에서 최신 공고 불러오기"
+            type="button"
           >
-            검색
+            <span className={isSyncing ? "animate-spin" : ""}>↻</span>
           </button>
         </div>
+        <button className="cursor-pointer whitespace-nowrap text-xs font-semibold text-slate-500 transition-colors hover:text-slate-950" onClick={resetFilters} type="button">
+          전체 초기화
+        </button>
       </div>
+
+      {syncError && <p className="mt-2 text-xs text-red-600">{syncError}</p>}
+
+      <div className="mt-4 grid items-end gap-3 xl:grid-cols-[minmax(0,3.5fr)_minmax(0,3.5fr)_minmax(0,3fr)_72px]">
+        <div className="min-w-0">
+          <h2 className="mb-2 text-sm font-bold text-slate-950">나라장터 공고검색</h2>
+          <input
+            aria-label="공고명, 공고번호 또는 기관명 검색"
+            className="h-10 w-full min-w-0 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-500"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="공고명, 공고번호, 기관명"
+            type="search"
+            value={query}
+          />
+        </div>
+
+        <div className="min-w-0">
+          <button className="mb-2 cursor-pointer text-xs font-semibold text-slate-500 transition-colors hover:text-slate-950 disabled:text-slate-300" disabled={savedKeywords.length === 0} onClick={loadSavedKeywords} type="button">
+            저장된 키워드 불러오기
+          </button>
+          <div className="flex min-h-10 min-w-0 flex-wrap items-center gap-1.5 rounded-md border border-slate-300 px-2 py-1 focus-within:border-blue-500">
+            {keywords.map((keyword) => (
+              <span className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-blue-50 px-2 text-xs font-semibold text-blue-700" key={keyword}>
+                {keyword}
+                <button aria-label={`${keyword} 키워드 삭제`} className="cursor-pointer" onClick={() => setKeywords(keywords.filter((item) => item !== keyword))} type="button">×</button>
+              </span>
+            ))}
+            <input
+              className="h-8 min-w-20 flex-1 border-0 px-1 text-sm outline-none"
+              onChange={(event) => setKeywordInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addKeyword();
+                }
+              }}
+              placeholder="키워드 추가"
+              value={keywordInput}
+            />
+            <button aria-label="검색 키워드 추가" className="h-7 w-7 shrink-0 cursor-pointer rounded-md text-lg text-slate-500 transition-colors hover:bg-slate-100" disabled={!keywordInput.trim()} onClick={addKeyword} title="검색 키워드 추가" type="button">+</button>
+          </div>
+        </div>
+
+        <div className="min-w-0">
+          <button className="mb-2 cursor-pointer text-xs font-semibold text-slate-500 transition-colors hover:text-slate-950 disabled:text-slate-300" disabled={savedRegions.length === 0} onClick={loadSavedRegions} type="button">
+            저장된 희망지역 불러오기
+          </button>
+          <div className="flex min-h-10 min-w-0 flex-wrap items-center gap-1.5 rounded-md border border-slate-300 px-2 py-1 focus-within:border-blue-500">
+            {regions.map((region) => (
+              <span className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-emerald-50 px-2 text-xs font-semibold text-emerald-700" key={region}>
+                {region}
+                <button aria-label={`${region} 지역 삭제`} className="cursor-pointer" onClick={() => setRegions(regions.filter((item) => item !== region))} type="button">×</button>
+              </span>
+            ))}
+            <select className="h-8 min-w-20 flex-1 cursor-pointer border-0 bg-white px-1 text-sm text-slate-600 outline-none" onChange={(event) => addRegion(event.target.value)} value="">
+              <option value="">희망 지역</option>
+              {REGION_OPTIONS.map((region) => <option disabled={regions.includes(region)} key={region}>{region}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <button className="h-10 cursor-pointer rounded-md bg-slate-950 text-sm font-semibold text-white transition-colors hover:bg-blue-700" type="submit">검색</button>
+      </div>
+
     </form>
   );
 }

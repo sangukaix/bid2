@@ -4,7 +4,7 @@ type BidSummaryProps = {
   summary: BidSummaryData;
 };
 
-export default function BidSummary({ summary }: BidSummaryProps) { // 공고 유형별 개수를 카드 형태로 표시
+export default function BidSummary({ summary }: BidSummaryProps) {
   const summaryItems = [
     { label: "전체 공고", count: summary.total },
     { label: "물품", count: summary.goods },
@@ -13,13 +13,15 @@ export default function BidSummary({ summary }: BidSummaryProps) { // 공고 유
   ];
 
   return (
-    <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="입찰공고 요약">
-      {summaryItems.map((item) => ( // 배열의 항목 수만큼 같은 모양의 카드를 반복 생성
-        <article className="rounded-lg border border-slate-200 bg-white p-5" key={item.label}>
-          <p className="text-sm font-medium text-slate-500">{item.label}</p>
-          <p className="mt-2 text-2xl font-bold text-slate-950">{item.count.toLocaleString()}</p>
-        </article>
-      ))}
+    <section className="overflow-x-auto border-b border-slate-200" aria-label="입찰공고 요약">
+      <div className="grid min-w-[560px] grid-cols-4 divide-x divide-slate-200">
+        {summaryItems.map((item) => (
+          <div className="flex items-center justify-center gap-3 px-5 py-4" key={item.label}>
+            <p className="whitespace-nowrap text-sm font-medium text-slate-500">{item.label}</p>
+            <p className="text-base font-normal text-slate-700">{item.count.toLocaleString()}</p>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }

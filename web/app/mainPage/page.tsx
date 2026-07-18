@@ -19,9 +19,9 @@ export default function MainPage() { // /mainPage 주소에서 보이는 메인 
       </section>
 
       <section className="mx-auto grid max-w-5xl gap-4 px-6 pb-20 md:grid-cols-3"> {/* 서비스 단계 카드 영역 */}
-        <StepCard title="1. 회사 정보 입력" description="회사 기본 정보와 희망 입찰 조건을 입력합니다." />
-        <StepCard title="2. 입찰공고 확인" description="나중에 나라장터 Open API로 가져온 공고를 확인합니다." />
-        <StepCard title="3. AI 분석 확인" description="추천 이유와 주의 조건을 AI가 설명합니다." />
+        <StepCard title="1. 회사 정보 입력" description="회사 기본 정보와 보유 역량, 희망 입찰 조건을 상세히 입력합니다." />
+        <StepCard title="2. AI 비서와 공고 입찰 가능성 확인" description="공고 문서를 AI 비서와 검토하고 우리 회사의 입찰 참가 가능성을 확인합니다." />
+        <StepCard title="3. 제안서 자동 생성" description="공고 요구사항과 회사 정보를 바탕으로 맞춤형 제안서 초안을 생성합니다." />
       </section>
     </main>
   );

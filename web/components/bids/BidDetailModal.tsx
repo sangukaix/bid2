@@ -3,6 +3,8 @@ import type { BidNotice } from "@/types/bid";
 
 type BidDetailModalProps = {
   bid: BidNotice;
+  trigger?: string;
+  triggerClassName?: string;
 };
 
 type Field = readonly [keyof BidNotice, string];
@@ -106,34 +108,38 @@ function formatValue(key: keyof BidNotice, value: BidNotice[keyof BidNotice]) {
 }
 
 
-export default function BidDetailModal({ bid }: BidDetailModalProps) {
+export default function BidDetailModal({
+  bid,
+  trigger = "전체보기",
+  triggerClassName = "whitespace-nowrap rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-500 hover:text-blue-600",
+}: BidDetailModalProps) {
   const dialogId = `bid-detail-${bid.bidNtceNo}-${bid.bidNtceOrd}`;
 
   return (
     <>
       <button
-        className="whitespace-nowrap rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-500 hover:text-blue-600"
+        className={triggerClassName}
         popoverTarget={dialogId}
         type="button"
       >
-        전체보기
+        {trigger}
       </button>
 
       <div
         aria-labelledby={`${dialogId}-title`}
-        className="max-h-[90vh] w-[calc(100%-2rem)] max-w-5xl overflow-hidden rounded-lg border-0 bg-white p-0 shadow-2xl backdrop:bg-slate-950/60"
+        className="fixed inset-0 m-auto max-h-[calc(100vh-3rem)] w-[min(960px,calc(100vw-2rem))] overflow-hidden rounded-lg border-0 bg-white p-0 shadow-2xl backdrop:bg-slate-950/55"
         id={dialogId}
         popover="auto"
         role="dialog"
       >
-          <div className="flex max-h-[90vh] flex-col overflow-hidden">
-            <header className="flex items-start justify-between gap-6 border-b border-slate-200 px-6 py-5 text-left">
+          <div className="flex max-h-[calc(100vh-3rem)] flex-col overflow-hidden">
+            <header className="flex items-start justify-between gap-6 border-b border-slate-200 bg-white px-6 py-5 text-left">
               <div className="min-w-0">
                 <p className="text-sm font-semibold text-blue-600">
                   {bid.bidNtceNo} · {bid.bidNtceOrd}차
                 </p>
                 <h2
-                  className="mt-1 text-lg font-bold leading-7 text-slate-950"
+                  className="mt-1 break-words text-lg font-bold leading-7 text-slate-950"
                   id={`${dialogId}-title`}
                 >
                   {bid.bidNtceNm}
