@@ -46,7 +46,7 @@ class CompanyProfile(models.Model):
     past_performance = models.TextField(blank=True)
 
     # 사용자가 원하는 입찰 조건
-    required_keywords = models.TextField(blank=True)  # 반드시 포함되어야 하는 검색어
+    required_keywords = models.TextField(blank=True)  # 기존 데이터 호환용, preferred_keywords와 합쳐 사용
     preferred_keywords = models.TextField()
     excluded_keywords = models.TextField(blank=True)  # 포함되면 추천에서 제외할 검색어
     preferred_bid_type = models.CharField(
@@ -166,6 +166,7 @@ class RecommendedBid(models.Model):
         related_name="recommended_to_users",
     )  # 조건과 일치한 공고
     match_score = models.PositiveSmallIntegerField(default=0)
+    title_match_count = models.PositiveSmallIntegerField(default=0)
     matched_keywords = models.JSONField(default=list, blank=True)
     match_reasons = models.JSONField(default=list, blank=True)
     is_match = models.BooleanField(default=True)  # 현재 회사 조건에도 계속 맞는 공고인지 표시

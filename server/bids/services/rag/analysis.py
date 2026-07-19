@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from .chatbot import CHAT_MODEL, build_full_page_context
 from .prepare_docs_for_ai import prepare_docs_for_ai
 from .retriever import search_bid_documents
+from ..recommendation import get_profile_keywords
 
 
 MAX_ANALYSIS_CONTEXT_CHARS = 30000  # 분석에 전달할 원문 길이 제한
@@ -96,13 +97,15 @@ analysis_prompt = ChatPromptTemplate.from_template(
 )
 
 
-analysis_model = ChatOpenAI(
-    model=CHAT_MODEL,
-    temperature=0,
-    max_completion_tokens=MAX_ANALYSIS_OUTPUT_TOKENS,
-).with_structured_output(BidAnalysisSchema)
+def build_analysis_chain():
+    """AI 분석을 실제로 생성할 때만 OpenAI 클라이언트를 만듭니다."""
 
-analysis_chain = analysis_prompt | analysis_model  # Prompt -> OpenAI -> Pydantic 결과
+    analysis_model = ChatOpenAI(
+        model=CHAT_MODEL,
+        temperature=0,
+        max_completion_tokens=MAX_ANALYSIS_OUTPUT_TOKENS,
+    ).with_structured_output(BidAnalysisSchema)
+    return analysis_prompt | analysis_model  # Prompt -> OpenAI -> Pydantic 결과
 
 
 def collect_analysis_documents(bid_ntce_no):
@@ -142,7 +145,7 @@ def company_context(profile):
         "보유역량": profile.capabilities,
         "인증및자격": profile.licenses,
         "과거실적": profile.past_performance,
-        "희망키워드": profile.preferred_keywords,
+        "찾는공고키워드": get_profile_keywords(profile),
         "희망지역": profile.preferred_region,
     }
     return json.dumps(data, ensure_ascii=False, indent=2)
@@ -160,7 +163,7 @@ def generate_bid_analysis(bid_ntce_no, profile):
     if not document_context:
         raise ValueError("분석에 사용할 공고 문서를 찾지 못했습니다.")
 
-    result = analysis_chain.invoke(
+    result = build_analysis_chain().invoke(
         {
             "company_context": company_context(profile),
             "document_context": document_context,

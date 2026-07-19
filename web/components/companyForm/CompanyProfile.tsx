@@ -1,9 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import LoginRequiredNotice from "@/components/auth/LoginRequiredNotice";
 import CompanyForm from "@/components/companyForm/CompanyForm";
+import { formatCompanyKeywords } from "@/lib/companyKeywords";
 import type { CompanyProfileData } from "@/types/company";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -89,14 +90,7 @@ export default function CompanyProfile() {
   }
 
   if (needsLogin) {
-    return (
-      <div className="mt-6 border-y border-slate-200 py-10 text-center">
-        <p className="text-sm text-red-600">로그인 후 확인이 가능합니다.</p>
-        <Link className="mt-4 inline-flex rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white" href="/login">
-          로그인
-        </Link>
-      </div>
-    );
+    return <LoginRequiredNotice />;
   }
 
   if (profile === null) {
@@ -163,8 +157,7 @@ export default function CompanyProfile() {
       <section className="rounded-lg border border-slate-200 bg-white p-6">
         <h2 className="text-base font-bold text-slate-950">희망 입찰 조건</h2>
         <dl className="mt-5 grid gap-5 md:grid-cols-2">
-          <SummaryItem full label="필수 키워드" value={profile.required_keywords} />
-          <SummaryItem full label="관심 키워드" value={profile.preferred_keywords} />
+          <SummaryItem full label="찾는 공고 키워드" value={formatCompanyKeywords(profile)} />
           <SummaryItem full label="제외 키워드" value={profile.excluded_keywords} />
           <SummaryItem label="공고 유형" value={bidTypeLabels[profile.preferred_bid_type] ?? "전체"} />
           <SummaryItem label="희망 지역" value={profile.preferred_region} />

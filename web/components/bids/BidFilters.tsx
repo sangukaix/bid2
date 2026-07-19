@@ -4,6 +4,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { parseRegions, REGION_OPTIONS } from "@/components/ui/RegionSelector";
+import { getBidSyncState, startBidSync, subscribeBidSync } from "@/lib/bidSync";
+import { getCompanyKeywords, parseKeywordText } from "@/lib/companyKeywords";
 import type { BidSearchParams } from "@/types/bid";
 import type { CompanyProfileData } from "@/types/company";
 
@@ -14,20 +16,16 @@ type BidFiltersProps = {
   lastUpdatedAt: string;
 };
 
-function parseKeywords(value = "") {
-  return value.split(",").map((keyword) => keyword.trim()).filter(Boolean);
-}
-
 export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) {
   const router = useRouter();
   const [query, setQuery] = useState(filters.q ?? "");
-  const [keywords, setKeywords] = useState(() => parseKeywords(filters.keywords));
+  const [keywords, setKeywords] = useState(() => parseKeywordText(filters.keywords));
   const [regions, setRegions] = useState(() => parseRegions(filters.regions ?? ""));
   const [savedKeywords, setSavedKeywords] = useState<string[]>([]); // 회사 정보에 저장된 원래 키워드
   const [savedRegions, setSavedRegions] = useState<string[]>([]); // 회사 정보에 저장된 원래 희망지역
   const [keywordInput, setKeywordInput] = useState("");
-  const [isSyncing, setIsSyncing] = useState(false); // 나라장터 업데이트 진행 상태
-  const [syncError, setSyncError] = useState(""); // 업데이트 실패 안내
+  const [syncState, setSyncState] = useState(getBidSyncState); // 페이지를 이동해도 유지되는 나라장터 업데이트 상태
+  const [syncAuthError, setSyncAuthError] = useState("");
 
   useEffect(() => {
     const token = localStorage.getItem("auth_token");
@@ -42,7 +40,7 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
       const data = (await response.json()) as { profile: CompanyProfileData | null };
       if (!data.profile) return;
 
-      const companyKeywords = parseKeywords(data.profile.preferred_keywords);
+      const companyKeywords = getCompanyKeywords(data.profile);
       const companyRegions = parseRegions(data.profile.preferred_region);
       const params = new URLSearchParams();
 
@@ -61,6 +59,18 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
 
     loadCompanyConditions(); // 최초 진입 시 회사 정보의 검색 조건 불러오기
   }, [filters.keywords, filters.regions, router]);
+
+  useEffect(() => {
+    let previousStatus = getBidSyncState().status;
+
+    return subscribeBidSync((nextState) => {
+      setSyncState(nextState);
+      if (previousStatus === "syncing" && nextState.status === "success") {
+        router.refresh();
+      }
+      previousStatus = nextState.status;
+    });
+  }, [router]);
 
   function addKeyword() {
     const keyword = keywordInput.trim();
@@ -111,30 +121,19 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
     router.push("/dashBoard/bidList?keywords=&regions=");
   }
 
-  async function refreshBidNotices() {
+  function refreshBidNotices() {
     const token = localStorage.getItem("auth_token");
     if (!token) {
-      setSyncError("로그인 후 공고를 업데이트할 수 있습니다.");
+      setSyncAuthError("로그인 후 공고를 업데이트할 수 있습니다.");
       return;
     }
 
-    setIsSyncing(true);
-    setSyncError("");
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/bids/sync/`, {
-        method: "POST",
-        headers: { Authorization: `Token ${token}` },
-      });
-
-      if (!response.ok) throw new Error();
-      router.refresh(); // 업데이트된 DB 목록과 마지막 업데이트 시간 다시 요청
-    } catch {
-      setSyncError("공고 업데이트에 실패했습니다. 잠시 후 다시 시도해 주세요.");
-    } finally {
-      setIsSyncing(false);
-    }
+    setSyncAuthError("");
+    void startBidSync(token);
   }
+
+  const isSyncing = syncState.status === "syncing";
+  const syncError = syncAuthError || syncState.message;
 
   return (
     <form className="p-5" onSubmit={handleSubmit}>
@@ -211,7 +210,7 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
               </span>
             ))}
             <select className="h-8 min-w-20 flex-1 cursor-pointer border-0 bg-white px-1 text-sm text-slate-600 outline-none" onChange={(event) => addRegion(event.target.value)} value="">
-              <option value="">희망 지역</option>
+              <option value="">전체 지역</option>
               {REGION_OPTIONS.map((region) => <option disabled={regions.includes(region)} key={region}>{region}</option>)}
             </select>
           </div>

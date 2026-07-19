@@ -48,7 +48,7 @@ export default function RegionSelector({
         onChange={(event) => addRegion(event.target.value)}
         value=""
       >
-        <option value="">지역 선택</option>
+        <option value="">전체 지역</option>
         {REGION_OPTIONS.map((region) => (
           <option disabled={regions.includes(region)} key={region} value={region}>
             {region}

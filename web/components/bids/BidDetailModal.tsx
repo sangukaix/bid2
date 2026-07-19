@@ -3,6 +3,7 @@ import type { BidNotice } from "@/types/bid";
 
 type BidDetailModalProps = {
   bid: BidNotice;
+  flowTrigger?: boolean;
   trigger?: string;
   triggerClassName?: string;
 };
@@ -110,6 +111,7 @@ function formatValue(key: keyof BidNotice, value: BidNotice[keyof BidNotice]) {
 
 export default function BidDetailModal({
   bid,
+  flowTrigger = false,
   trigger = "전체보기",
   triggerClassName = "whitespace-nowrap rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:border-blue-500 hover:text-blue-600",
 }: BidDetailModalProps) {
@@ -117,13 +119,19 @@ export default function BidDetailModal({
 
   return (
     <>
-      <button
-        className={triggerClassName}
-        popoverTarget={dialogId}
-        type="button"
-      >
-        {trigger}
-      </button>
+      {flowTrigger ? (
+        <button className="contents" popoverTarget={dialogId} type="button">
+          <span className={triggerClassName}>{trigger}</span>
+        </button>
+      ) : (
+        <button
+          className={triggerClassName}
+          popoverTarget={dialogId}
+          type="button"
+        >
+          {trigger}
+        </button>
+      )}
 
       <div
         aria-labelledby={`${dialogId}-title`}

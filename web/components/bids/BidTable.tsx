@@ -48,17 +48,21 @@ function RegionInfo({ bid }: { bid: BidNotice }) {
   const needsTooltip = regionParts.length > 2 || preview.length > 14;
 
   if (!needsTooltip) {
-    return <p className="mt-1 text-xs text-slate-500">{region}</p>;
+    return (
+      <p className="mt-1 max-w-20 overflow-hidden break-keep text-xs leading-4 text-slate-500 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+        {region}
+      </p>
+    );
   }
 
   return (
-    <span className="group relative mt-1 block max-w-28">
+    <span className="group relative mt-1 block max-w-20">
       <button
         aria-label={`참가 지역 확인: ${region}`}
         className="flex w-full cursor-help items-center gap-1 text-left text-xs text-slate-500 hover:text-blue-600"
         type="button"
       >
-        <span className="truncate">{preview}</span>
+        <span className="overflow-hidden break-keep leading-4 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">{preview}</span>
         <span aria-hidden="true" className="shrink-0 text-[10px]">▾</span>
       </button>
       <span className="invisible absolute left-0 top-7 z-20 w-64 whitespace-normal break-words rounded-md bg-slate-900 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
@@ -122,7 +126,7 @@ export default function BidTable({ data, error, filters }: BidTableProps) { // �
         <table className="w-full min-w-[1000px] border-collapse text-left text-sm">
           <thead className="bg-slate-50 text-slate-600">
             <tr>
-              <th className="w-32 whitespace-nowrap px-4 py-3 font-semibold" scope="col">
+              <th className="w-24 whitespace-nowrap px-3 py-3 font-semibold" scope="col">
                 <label className={`relative inline-flex cursor-pointer items-center gap-1 ${filters.business_type ? "text-blue-600" : ""}`}>
                   <span>구분</span>
                   <span aria-hidden="true" className="text-xs">▾</span>
@@ -201,28 +205,32 @@ export default function BidTable({ data, error, filters }: BidTableProps) { // �
                 key={`${bid.bidNtceNo}-${bid.bidNtceOrd}`} // 공고번호와 차수로 각 행을 구분
                 className="hover:bg-slate-50"
               >
-                <td className="whitespace-nowrap px-4 py-4 text-slate-600">
+                <td className="px-3 py-4 text-slate-600">
                   {bid.bsnsDivNm} {/* 업무 구분 */}
                   <RegionInfo bid={bid} />
                 </td>
 
-                <td className="px-4 py-4">
-                  <div className="flex items-end gap-2 leading-6">
+                <td className="px-3 py-4">
+                  <div className="leading-6">
                     <BidDetailModal
                       bid={bid}
+                      flowTrigger
                       trigger={bid.bidNtceNm}
-                      triggerClassName="min-w-0 flex-1 cursor-pointer whitespace-normal text-left font-semibold text-slate-950 transition-colors hover:text-blue-600 hover:underline"
+                      triggerClassName="inline cursor-pointer break-keep text-left font-semibold text-slate-950 transition-colors hover:text-blue-600 hover:underline"
                     /> {/* 공고명을 누르면 상세 팝업 열기 */}
 
                     {typeof bid.bidNtceUrl === "string" && bid.bidNtceUrl && (
-                      <a
-                        className="inline-flex h-6 shrink-0 cursor-pointer items-center justify-center rounded-md border border-slate-300 px-2 text-[11px] font-semibold text-slate-600 hover:border-blue-400 hover:text-blue-600"
-                        href={bid.bidNtceUrl}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        원문
-                      </a>
+                      <>
+                        {" "}
+                        <a
+                          className="inline-flex h-6 cursor-pointer items-center justify-center rounded-md border border-slate-300 px-2 align-middle text-[11px] font-semibold text-slate-600 hover:border-blue-400 hover:text-blue-600"
+                          href={bid.bidNtceUrl}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          원문
+                        </a>
+                      </>
                     )}
                   </div>
 

@@ -1,7 +1,4 @@
-from datetime import timedelta
-
 from django.db.models import Q
-from django.utils import timezone
 
 from bids.models import BidNotice, CompanyProfile, RecommendedBid
 
@@ -27,6 +24,17 @@ def parse_conditions(value):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def get_profile_keywords(profile):
+    """기존 두 필드의 값을 하나의 중복 없는 추천 키워드 목록으로 합칩니다."""
+
+    return list(
+        dict.fromkeys(
+            parse_conditions(profile.required_keywords)
+            + parse_conditions(profile.preferred_keywords)
+        )
+    )
+
+
 def notice_amount(notice):
     return notice.budget_amount or notice.estimated_price
 
@@ -46,8 +54,7 @@ def matches_region(notice, preferred_regions):
 def build_recommendation(
     notice,
     profile,
-    required_keywords,
-    preferred_keywords,
+    keywords,
     excluded_keywords,
     preferred_regions,
 ):
@@ -63,17 +70,12 @@ def build_recommendation(
     ).lower()
     searchable_text = f"{title} {secondary_text}"
 
-    # 필수 단어는 모두 있어야 하고 제외 단어는 하나라도 있으면 탈락합니다.
-    if required_keywords and not all(
-        keyword.lower() in searchable_text for keyword in required_keywords
-    ):
-        return None
+    # 제외 단어가 하나라도 있으면 추천하지 않습니다.
     if any(keyword.lower() in searchable_text for keyword in excluded_keywords):
         return None
 
-    all_keywords = list(dict.fromkeys(required_keywords + preferred_keywords))
     matched_keywords = [
-        keyword for keyword in all_keywords if keyword.lower() in searchable_text
+        keyword for keyword in keywords if keyword.lower() in searchable_text
     ]
     if not matched_keywords:
         return None
@@ -102,34 +104,36 @@ def build_recommendation(
     ]
 
     if title_matches:
-        score += 30
-        reasons.append(f"공고명 키워드 일치: {', '.join(title_matches)}")
+        title_score = min(40 + (len(title_matches) - 1) * 10, 60)
+        score += title_score
+        reasons.append(
+            f"공고명 키워드 {len(title_matches)}개 일치 (+{title_score}점): "
+            f"{', '.join(title_matches)}"
+        )
     if secondary_matches:
-        score += 20
-        reasons.append(f"업종·기관 키워드 일치: {', '.join(secondary_matches)}")
+        secondary_score = min(10 + (len(secondary_matches) - 1) * 5, 15)
+        score += secondary_score
+        reasons.append(
+            f"업종·기관 키워드 {len(secondary_matches)}개 일치 (+{secondary_score}점): "
+            f"{', '.join(secondary_matches)}"
+        )
     if preferred_type:
-        score += 15
-        reasons.append(f"업무 구분 일치: {preferred_type}")
-    if preferred_regions:
-        score += 15
-        reasons.append("전국 참가 가능" if not notice.region_limit else "희망 지역 일치")
-    if profile.min_bid_amount is not None or profile.max_bid_amount is not None:
         score += 10
-        reasons.append("희망 금액 범위 포함")
-
-    today = timezone.localdate()
-    if notice.notice_date and notice.notice_date >= today - timedelta(days=7):
+        reasons.append(f"업무 구분 일치 (+10점): {preferred_type}")
+    if preferred_regions:
+        score += 10
+        region_reason = "전국 참가 가능" if not notice.region_limit else "희망 지역 일치"
+        reasons.append(f"{region_reason} (+10점)")
+    if profile.min_bid_amount is not None or profile.max_bid_amount is not None:
         score += 5
-        reasons.append("최근 7일 이내 등록")
-    if notice.close_at and notice.close_at >= timezone.now() + timedelta(days=3):
-        score += 5
-        reasons.append("마감까지 3일 이상 남음")
+        reasons.append("희망 금액 범위 포함 (+5점)")
 
     if score < MIN_RECOMMENDATION_SCORE:
         return None
 
     return {
         "match_score": min(score, 100),
+        "title_match_count": len(title_matches),
         "matched_keywords": matched_keywords,
         "match_reasons": reasons,
     }
@@ -140,19 +144,17 @@ def match_user_recommendations(user):
     if profile is None:
         return {"checked": 0, "created": 0, "updated": 0}
 
-    required_keywords = parse_conditions(profile.required_keywords)
-    preferred_keywords = parse_conditions(profile.preferred_keywords)
+    keywords = get_profile_keywords(profile)
     excluded_keywords = parse_conditions(profile.excluded_keywords)
     preferred_regions = parse_conditions(profile.preferred_region)
-    all_keywords = list(dict.fromkeys(required_keywords + preferred_keywords))
 
     # 과거 기록과 알림 이력은 보존하고 이번 상위 추천만 다시 활성화합니다.
     RecommendedBid.objects.filter(user=user).update(is_match=False)
-    if not all_keywords:
+    if not keywords:
         return {"checked": 0, "created": 0, "updated": 0}
 
     keyword_condition = Q()
-    for keyword in all_keywords:
+    for keyword in keywords:
         keyword_condition |= (
             Q(title__icontains=keyword)
             | Q(allowed_industry__icontains=keyword)
@@ -168,8 +170,7 @@ def match_user_recommendations(user):
         match_data = build_recommendation(
             notice,
             profile,
-            required_keywords,
-            preferred_keywords,
+            keywords,
             excluded_keywords,
             preferred_regions,
         )
@@ -179,7 +180,9 @@ def match_user_recommendations(user):
     ranked_matches.sort(
         key=lambda item: (
             item[1]["match_score"],
-            item[0].notice_date or timezone.localdate() - timedelta(days=36500),
+            item[1]["title_match_count"],
+            item[0].notice_date.toordinal() if item[0].notice_date else 0,
+            item[0].close_at.timestamp() if item[0].close_at else 0,
         ),
         reverse=True,
     )
@@ -207,6 +210,7 @@ def match_user_recommendations(user):
             recommendation.save(
                 update_fields=[
                     "match_score",
+                    "title_match_count",
                     "matched_keywords",
                     "match_reasons",
                     "is_match",

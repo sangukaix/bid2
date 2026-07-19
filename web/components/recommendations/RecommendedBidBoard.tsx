@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import LoginRequiredNotice from "@/components/auth/LoginRequiredNotice";
 import BidDetailModal from "@/components/bids/BidDetailModal";
 import SaveBidButton from "@/components/bids/SaveBidButton";
 import type { BidNotice, StoredRecommendationResponse } from "@/types/bid";
@@ -16,13 +17,14 @@ function formatAmount(bid: BidNotice) {
 export default function RecommendedBidBoard() {
   const [data, setData] = useState<StoredRecommendationResponse | null>(null);
   const [error, setError] = useState("");
+  const [needsLogin, setNeedsLogin] = useState(false);
   const [businessType, setBusinessType] = useState(""); // 추천 목록에서 선택한 업무 구분
 
   useEffect(() => {
     async function loadRecommendations() {
       const token = localStorage.getItem("auth_token");
       if (!token) {
-        setError("로그인 후 확인이 가능합니다.");
+        setNeedsLogin(true);
         return;
       }
 
@@ -30,8 +32,8 @@ export default function RecommendedBidBoard() {
         const response = await fetch(`${API_BASE_URL}/api/recommendations/`, {
           headers: { Authorization: `Token ${token}` },
         });
-        if (response.status === 401) {
-          setError("로그인 후 확인이 가능합니다.");
+        if (response.status === 401 || response.status === 403) {
+          setNeedsLogin(true);
           return;
         }
         if (!response.ok) throw new Error();
@@ -44,6 +46,9 @@ export default function RecommendedBidBoard() {
     loadRecommendations();
   }, []);
 
+  if (needsLogin) {
+    return <LoginRequiredNotice />;
+  }
   if (error) {
     return <p className="mt-6 rounded-md bg-red-50 px-5 py-12 text-center text-sm text-red-600">{error}</p>;
   }
@@ -96,7 +101,7 @@ export default function RecommendedBidBoard() {
                       <span className="text-center leading-4">조건<br />일치도</span>
                       <button aria-label="조건 일치도 계산 기준" className="flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-slate-400 text-[10px] text-slate-500" type="button">?</button>
                       <span className="invisible absolute left-0 top-6 z-20 w-72 rounded-md bg-slate-900 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
-                        공고명 키워드 30점, 업종·기관 키워드 20점, 업무 구분 15점, 희망 지역 15점, 금액 범위 10점, 최근 등록과 여유 있는 마감일 각 5점을 합산합니다.
+                        공고명은 첫 키워드 40점·추가 키워드당 10점(최대 60점), 업종·기관은 첫 키워드 10점·추가 키워드당 5점(최대 15점)입니다. 업무 구분과 희망 지역은 각 10점, 금액 범위는 5점입니다. 동점이면 공고명 일치 개수, 최신 등록일, 마감일 순으로 정렬합니다.
                       </span>
                     </span>
                   </th>
@@ -110,10 +115,13 @@ export default function RecommendedBidBoard() {
                   <tr className="hover:bg-slate-50" key={`${bid.bidNtceNo}-${bid.bidNtceOrd}`}>
                     <td className="px-4 py-4 text-slate-600">{bid.bsnsDivNm || "-"}</td>
                     <td className="px-4 py-4">
-                      <div className="flex items-end gap-2 leading-5">
-                        <BidDetailModal bid={bid} trigger={bid.bidNtceNm} triggerClassName="min-w-0 flex-1 cursor-pointer text-left font-semibold text-slate-950 hover:text-blue-600" />
+                      <div className="leading-5">
+                        <BidDetailModal bid={bid} flowTrigger trigger={bid.bidNtceNm} triggerClassName="inline cursor-pointer break-keep text-left font-semibold text-slate-950 hover:text-blue-600" />
                         {typeof bid.bidNtceUrl === "string" && bid.bidNtceUrl ? (
-                          <a className="inline-flex h-6 shrink-0 items-center rounded-md border border-slate-300 px-2 text-[11px] font-semibold text-slate-600 hover:border-blue-400 hover:text-blue-600" href={bid.bidNtceUrl} rel="noreferrer" target="_blank">원문</a>
+                          <>
+                            {" "}
+                            <a className="inline-flex h-6 items-center rounded-md border border-slate-300 px-2 align-middle text-[11px] font-semibold text-slate-600 hover:border-blue-400 hover:text-blue-600" href={bid.bidNtceUrl} rel="noreferrer" target="_blank">원문</a>
+                          </>
                         ) : null}
                       </div>
                       <p className="mt-1 text-xs text-slate-500">{bid.matchReasons?.join(" · ") || "회사 조건 일치"}</p>
@@ -129,8 +137,6 @@ export default function RecommendedBidBoard() {
           </div>
         </div>
       )}
-
-      <p className="text-xs leading-5 text-slate-500">조건 일치도는 규칙 기반 검색 결과이며 낙찰 확률이나 AI 판단이 아닙니다. 문자·이메일 발송은 다음 단계에서 연결합니다.</p>
     </div>
   );
 }

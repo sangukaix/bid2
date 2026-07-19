@@ -15,6 +15,7 @@ from rest_framework.response import Response
 
 from .models import BidAnalysis, BidChatMessage, BidNotice, CompanyProfile, RecommendedBid, SavedBid
 from .serializers import CompanyProfileSerializer, LoginSerializer, SignupSerializer
+from .services.recommendation import get_profile_keywords
 
 
 DEFAULT_PAGE_SIZE = 20
@@ -254,7 +255,12 @@ def stored_recommendation_list(request):
         user=request.user,
         bid_notice__is_active=True,
         is_match=True,
-    ).select_related("bid_notice").order_by("-match_score", "-bid_notice__notice_date")
+    ).select_related("bid_notice").order_by(
+        "-match_score",
+        "-title_match_count",
+        "-bid_notice__notice_date",
+        "-bid_notice__close_at",
+    )
     return Response(
         {
             "count": recommendations.count(),
@@ -386,7 +392,7 @@ def recommended_bid_list(request):
     if "keywords" in request.GET:
         keyword_text = request.GET.get("keywords", "")  # 추천 화면에서 보낸 임시 키워드
     else:
-        keyword_text = profile.preferred_keywords if profile else ""  # 저장된 회사 키워드
+        keyword_text = ",".join(get_profile_keywords(profile)) if profile else ""  # 저장된 회사 키워드
 
     if "region" in request.GET:
         region_text = request.GET.get("region", "")  # 추천 화면에서 임시로 바꾼 지역

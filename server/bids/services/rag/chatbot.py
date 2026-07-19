@@ -39,15 +39,16 @@ prompt = ChatPromptTemplate.from_template(
 )  # 질문과 검색 문서를 넣을 PromptTemplate
 
 
-model = ChatOpenAI(
-    model=CHAT_MODEL,
-    temperature=0,
-    max_completion_tokens=MAX_OUTPUT_TOKENS,
-)  # 같은 문서에는 최대한 일관되게 답변하도록 설정
+def build_chat_chain():
+    """AI를 실제로 호출할 때만 OpenAI 클라이언트를 만듭니다."""
 
-
-chain = prompt | model | StrOutputParser()
-# Prompt → OpenAI → 문자열 변환 순서로 연결한 LCEL 체인
+    model = ChatOpenAI(
+        model=CHAT_MODEL,
+        temperature=0,
+        max_completion_tokens=MAX_OUTPUT_TOKENS,
+    )  # 같은 문서에는 최대한 일관되게 답변하도록 설정
+    return prompt | model | StrOutputParser()
+    # Prompt → OpenAI → 문자열 변환 순서로 연결한 LCEL 체인
 
 
 def build_full_page_context(documents, max_context_chars=MAX_CONTEXT_CHARS):
@@ -114,7 +115,7 @@ def ask_bid_question(bid_ntce_no, question):
     context, sources = build_full_page_context(documents)
     # 검색된 Chunk의 원본 페이지를 AI 문맥과 출처로 정리
 
-    answer = chain.invoke(
+    answer = build_chat_chain().invoke(
         {
             "context": context,
             "question": question,

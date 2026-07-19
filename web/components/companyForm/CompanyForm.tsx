@@ -5,6 +5,7 @@ import { FormEvent, useState } from "react";
 import Input from "@/components/ui/Input"; // 한 줄 입력칸을 재사용하기 위한 컴포넌트
 import RegionSelector, { parseRegions } from "@/components/ui/RegionSelector"; // 여러 희망 지역 선택
 import FormSection from "@/components/companyForm/FormSection"; // 관련 입력값을 주제별로 묶는 컴포넌트
+import { formatCompanyKeywords } from "@/lib/companyKeywords";
 import type { CompanyProfileData } from "@/types/company"; // 회사 정보 JSON의 TypeScript 자료형
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -158,27 +159,17 @@ export default function CompanyForm({ initialProfile, onCancel, onSaved }: Compa
       </FormSection>
 
       <FormSection title="희망 입찰 조건" description="찾고 싶은 입찰공고의 기준을 입력해주세요.">
-        <label className="block md:col-span-2"> {/* 반드시 포함되어야 하는 키워드 */}
-          <span className="text-sm font-medium text-slate-700">필수 키워드</span>
-          <textarea
-            className="mt-2 min-h-20 w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
-            defaultValue={initialProfile?.required_keywords}
-            name="required_keywords"
-            placeholder="예: 정보시스템, 유지보수 (입력한 단어가 모두 포함된 공고만 추천)"
-          />
-          <span className="mt-2 block text-xs text-slate-500">필수 조건이 없다면 비워두세요. 여러 키워드는 쉼표로 구분합니다.</span>
-        </label>
-
-        <label className="block md:col-span-2"> {/* 공고 점수에 가산할 관심 단어 */}
-          <span className="text-sm font-medium text-slate-700">관심 키워드 *</span>
+        <label className="block md:col-span-2">
+          <span className="text-sm font-medium text-slate-700">찾는 공고 키워드 *</span>
           <textarea
             className="mt-2 min-h-24 w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
-            defaultValue={initialProfile?.preferred_keywords}
+            defaultValue={formatCompanyKeywords(initialProfile)}
             name="preferred_keywords"
-            placeholder="예: 홈페이지 구축, 시스템 유지보수, 웹 접근성 (일치하는 단어가 많을수록 추천 점수 상승)"
+            placeholder="예: 홈페이지 구축, 시스템 유지보수, 웹 접근성"
             required
           />
-          <span className="mt-2 block text-xs text-slate-500">여러 키워드는 쉼표로 구분합니다.</span>
+          <input name="required_keywords" readOnly type="hidden" value="" />
+          <span className="mt-2 block text-xs text-slate-500">쉼표로 구분해 입력하세요. 일치하는 키워드가 많을수록 추천 점수가 높아집니다.</span>
         </label>
 
         <label className="block md:col-span-2"> {/* 포함되면 추천하지 않을 단어 */}

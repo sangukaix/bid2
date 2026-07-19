@@ -958,6 +958,80 @@ class RecommendationTests(TestCase):
         self.assertEqual(result["created"], 0)
         self.assertFalse(RecommendedBid.objects.filter(is_match=True).exists())
 
+    def test_기존_필수와_관심_키워드를_하나의_목록으로_추천한다(self):
+        profile = self.user.company_profile
+        profile.required_keywords = "번역"
+        profile.preferred_keywords = "외국어"
+        profile.save(update_fields=["required_keywords", "preferred_keywords"])
+        BidNotice.objects.create(
+            bid_ntce_no="REC-002",
+            title="서울 번역 운영 용역",
+            business_type="용역",
+            region_limit=True,
+            allowed_region="서울특별시",
+            is_active=True,
+        )
+
+        match_user_recommendations(self.user)
+
+        self.assertEqual(
+            RecommendedBid.objects.filter(user=self.user, is_match=True).count(),
+            2,
+        )
+
+    def test_공고명에_일치한_키워드가_많을수록_점수가_높다(self):
+        BidNotice.objects.create(
+            bid_ntce_no="REC-002",
+            title="서울 외국어 통역 운영 용역",
+            business_type="용역",
+            region_limit=True,
+            allowed_region="서울특별시",
+            is_active=True,
+        )
+
+        match_user_recommendations(self.user)
+
+        two_keyword_score = RecommendedBid.objects.get(
+            bid_notice__bid_ntce_no="REC-001"
+        ).match_score
+        one_keyword_score = RecommendedBid.objects.get(
+            bid_notice__bid_ntce_no="REC-002"
+        ).match_score
+        self.assertEqual(two_keyword_score, 70)
+        self.assertEqual(one_keyword_score, 60)
+        self.assertGreater(two_keyword_score, one_keyword_score)
+
+    def test_점수가_같으면_공고명_키워드가_많이_일치한_공고가_먼저다(self):
+        BidNotice.objects.create(
+            bid_ntce_no="REC-002",
+            title="서울 외국어 운영 용역",
+            allowed_industry="교육 서비스",
+            business_type="용역",
+            region_limit=True,
+            allowed_region="서울특별시",
+            is_active=True,
+            raw_data={
+                "bidNtceNo": "REC-002",
+                "bidNtceOrd": "000",
+                "bidNtceNm": "서울 외국어 운영 용역",
+                "bsnsDivNm": "용역",
+            },
+        )
+        match_user_recommendations(self.user)
+        self.client.force_login(self.user)
+
+        response = self.client.get("/api/recommendations/")
+
+        self.assertEqual(response.json()["items"][0]["bidNtceNo"], "REC-001")
+        self.assertEqual(
+            list(
+                RecommendedBid.objects.order_by("bid_notice__bid_ntce_no").values_list(
+                    "match_score", "title_match_count"
+                )
+            ),
+            [(70, 2), (70, 1)],
+        )
+
     def test_조건에_맞는_공고가_많아도_상위_10건만_활성화한다(self):
         for number in range(2, 13):
             BidNotice.objects.create(

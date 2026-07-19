@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import LoginRequiredNotice from "@/components/auth/LoginRequiredNotice";
 import BidDetailModal from "@/components/bids/BidDetailModal";
 import BidChatButton from "@/components/chat/BidChatButton";
 import type { BidNotice, SavedBidResponse } from "@/types/bid";
@@ -18,12 +19,13 @@ export default function SavedBidBoard() {
   const [bids, setBids] = useState<BidNotice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [needsLogin, setNeedsLogin] = useState(false);
 
   useEffect(() => {
     async function loadSavedBids() {
       const token = localStorage.getItem("auth_token");
       if (!token) {
-        setError("로그인 후 확인이 가능합니다.");
+        setNeedsLogin(true);
         setIsLoading(false);
         return;
       }
@@ -32,6 +34,10 @@ export default function SavedBidBoard() {
         const response = await fetch(`${API_BASE_URL}/api/saved-bids/`, {
           headers: { Authorization: `Token ${token}` },
         });
+        if (response.status === 401 || response.status === 403) {
+          setNeedsLogin(true);
+          return;
+        }
         if (!response.ok) throw new Error();
         const data = (await response.json()) as SavedBidResponse;
         setBids(data.items);
@@ -63,6 +69,10 @@ export default function SavedBidBoard() {
     } else {
       setError("저장 취소에 실패했습니다.");
     }
+  }
+
+  if (needsLogin) {
+    return <LoginRequiredNotice />;
   }
 
   return (
@@ -99,10 +109,13 @@ export default function SavedBidBoard() {
                 <tr className="hover:bg-slate-50" key={`${bid.bidNtceNo}-${bid.bidNtceOrd}`}>
                   <td className="px-3 py-4 text-slate-600">{bid.bsnsDivNm || "-"}</td>
                   <td className="px-3 py-4">
-                    <div className="flex items-end gap-2 leading-5">
-                      <BidDetailModal bid={bid} trigger={bid.bidNtceNm} triggerClassName="min-w-0 flex-1 cursor-pointer text-left font-semibold text-slate-950 hover:text-blue-600" />
+                    <div className="leading-5">
+                      <BidDetailModal bid={bid} flowTrigger trigger={bid.bidNtceNm} triggerClassName="inline cursor-pointer break-keep text-left font-semibold text-slate-950 hover:text-blue-600" />
                       {typeof bid.bidNtceUrl === "string" && bid.bidNtceUrl ? (
-                        <a className="inline-flex h-6 shrink-0 items-center rounded-md border border-slate-300 px-2 text-[11px] font-semibold text-slate-600 hover:border-blue-400 hover:text-blue-600" href={bid.bidNtceUrl} rel="noreferrer" target="_blank">원문</a>
+                        <>
+                          {" "}
+                          <a className="inline-flex h-6 items-center rounded-md border border-slate-300 px-2 align-middle text-[11px] font-semibold text-slate-600 hover:border-blue-400 hover:text-blue-600" href={bid.bidNtceUrl} rel="noreferrer" target="_blank">원문</a>
+                        </>
                       ) : null}
                     </div>
                   </td>
