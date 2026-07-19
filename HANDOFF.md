@@ -1,259 +1,373 @@
 # BID2 프로젝트 작업 인수인계
 
-작성일: 2026-07-18
+작성일: 2026-07-19
 
-다음 작업 장소: 집
+다음 작업 장소: 학원 컴퓨터
 
-기준 커밋: `57b76a6` (`2026학원`, 2026-07-18 18:57 KST)
+프로젝트 저장소: BID2
+집 컴퓨터 경로: `D:\mbca_home\projects\bid2`
 
-원격 상태: 작성 시점에 `main`과 `origin/main`이 동일함
+작성 직전 기준 커밋:
 
-## 1. 내일 시작할 때 가장 먼저 할 일
+- `b3781fe` (`20260719home`)
+- 작성 시점에 `main`, `origin/main`이 동일함
+- 오늘 주요 코드와 기존 과제 문서 2개는 위 커밋으로 원격에 반영됨
+- 이 `HANDOFF.md`와 `docs/BID2_과제_요구사항_점검표.md`는 작성 후 함께 커밋해야 함
+- 다음 컴퓨터에서는 이 문서에 적힌 해시보다 `git log -1`에 표시되는 최신 커밋을 우선 기준으로 삼을 것
 
-집 컴퓨터에 저장소가 이미 있다면:
+> 보안 주의: 실제 API Key, `.env` 값, 비밀번호는 이 문서·채팅·Git에 기록하지 않는다.
+
+## 1. 다음 작업을 시작할 때 가장 먼저 할 일
+
+학원 컴퓨터의 기존 BID2 저장소에서 다음 순서로 확인한다. 경로가 다르면 학원 컴퓨터의 실제 저장소 경로를 사용한다.
 
 ```powershell
-cd D:\mbca_home\projects\bid2
+cd <학원 컴퓨터의 BID2 저장소 경로>
 git status
 git pull
-git log -3 --oneline
+git log -3 --oneline --decorate
 ```
-
-저장소가 없다면 GitHub에서 먼저 clone한다.
 
 Codex에는 다음과 같이 요청한다.
 
-> HANDOFF.md를 먼저 전부 읽고 git status, 최근 커밋, 실제 코드 구조를 확인해줘. 백엔드 테스트와 프론트 빌드를 실행해 현재 상태를 검증한 다음, 오늘 작업 요약과 다음 우선순위를 보여주고 이어서 작업해줘.
+> 저장소 최상위의 HANDOFF.md를 처음부터 끝까지 읽고, git status와 최근 커밋을 확인해줘. 실제 프로젝트 구조와 코드가 HANDOFF 내용과 일치하는지 확인하고, 마이그레이션·Django check·백엔드 테스트·프론트 빌드를 검증해줘. 오류가 있으면 원인을 먼저 설명하고 수정해줘. API Key나 .env 실제 값은 노출하지 말고, test1 계정은 변경하지 마.
 
-## 2. 프로젝트 구성
+처음 확인할 문서:
+
+1. `HANDOFF.md`
+2. `docs/BID2_과제_요구사항_점검표.md`
+3. `docs/BID2_과제_설계_문서.md`
+4. `docs/BID2_프로젝트_폴더_구조.md`
+
+## 2. 프로젝트 구성과 역할
 
 ```text
 bid2
-├─ server/  Django 5.2 + Django REST Framework 백엔드
-└─ web/     Next.js 16 + React 19 + TypeScript 프론트엔드
+|-- server/  Django 5.2 + Django REST Framework 백엔드
+|-- web/     Next.js 16 + React 19 + TypeScript 프론트엔드
+|-- docs/    과제 설계, 실제 폴더 구조, 요구사항 점검 문서
+`-- HANDOFF.md
 ```
 
 주요 데이터 흐름:
 
 ```text
-나라장터 API → Django 수집 명령 → BidNotice DB
-                                  ├─ 검색/필터 API → Next.js 공고 목록
-                                  ├─ 회사 조건 매칭 → 회원별 추천 공고
-                                  └─ 첨부 문서 → Chroma/OpenAI → AI 채팅·분석·PDF
+나라장터 API
+`-- Django 공고 수집
+    `-- BidNotice DB
+        |-- 검색·필터 API -> Next.js 공고 목록
+        |-- 회사 조건 매칭 -> 회원별 추천 공고
+        |-- 저장 공고 -> AI 채팅·AI 분석
+        `-- 첨부 문서 -> 추출·Chunk·Embedding·Chroma -> RAG 답변·분석·PDF
 ```
 
-## 3. 2026-07-18 완료한 작업
+역할 구분:
 
-오늘 커밋은 70개 파일, 약 6,226줄 추가 규모다.
+- Next.js·React: 사용자가 보는 화면, 폼 입력, 로그인 토큰, 필터와 목록 상태 처리
+- Django·DRF: 인증, DB, 나라장터 수집, 추천 규칙, 저장 공고, AI API 처리
+- SQLite: 회원, 회사정보, 공고, 추천, 저장 공고, 채팅, 분석 결과 저장
+- LangChain: Prompt, Retriever, OpenAI 모델, Output Parser 연결
+- Chroma: 공고 첨부문서 Chunk의 벡터 인덱스 저장과 검색
+- OpenAI: Embedding과 RAG 답변·분석 결과 생성
 
-### 백엔드 데이터 모델 및 마이그레이션
+상세한 실제 파일 트리는 `docs/BID2_프로젝트_폴더_구조.md`를 참고한다.
 
-다음 모델과 마이그레이션이 추가되었다.
-
-- `CompanyProfile`: 회사 정보, 선호 지역/키워드, 제외 키워드 등
-- `SavedBid`: 사용자가 저장한 관심 공고
-- `RecommendedBid`: 사용자별 추천 공고와 매칭 여부/근거
-- `BidAnalysis`: 공고 AI 분석 결과
-- `BidChatMessage`: 공고별 AI 질문·답변 기록
-- 마이그레이션 `0003`부터 `0008`까지 추가
+## 3. 기존 핵심 기능
 
 ### 인증과 회사 프로필
 
-- 회원가입, 로그인, 로그아웃 API 구현
-- DRF Token 기반 인증 적용
-- 회사 프로필 최초 저장 및 조회/수정 기능 구현
-- 프론트에 로그인, 회원가입, 로그아웃, 내 정보/회사 정보 화면 연결
+- 회원가입, 로그인, 로그아웃
+- DRF Token 인증
+- 회사정보 입력, 조회, 수정
+- 희망 지역, 공고 유형, 금액, 키워드를 회사 추천 조건으로 사용
 
-API:
+### 입찰공고
 
-- `POST /api/auth/signup/`
-- `POST /api/auth/login/`
-- `POST /api/auth/logout/`
-- `GET/POST/PUT /api/company-profile/`
+- 나라장터 API 수집 및 최근 공고 동기화
+- DB 기반 목록과 상세 API
+- 검색, 키워드, 지역, 업무 구분, 마감일 정렬
+- 상세 모달과 나라장터 원문 링크
 
-### 입찰 공고 조회와 필터
+### 저장 공고와 추천
 
-- DB 기반 공고 목록과 상세 조회 API 구현
-- 페이지네이션, 일반 검색, 키워드, 지역, 마감일 정렬 지원
-- 공고 목록 테이블, 요약, 상세 모달, 필터 UI 개선
-- 지역 선택 컴포넌트 추가
-- 나라장터 공고 수동 동기화 API 연결
+- 회원별 공고 저장과 취소
+- 회사 조건 기반 규칙 추천
+- 추천 근거와 점수 저장
+- 저장 공고에서 AI 채팅과 AI 분석 실행
 
-주요 API:
+### RAG와 AI
 
-- `GET /api/bids/`
-- `GET /api/bids/<공고번호>/`
-- `POST /api/bids/sync/`
+- 나라장터 첨부파일 조회와 다운로드
+- PDF, HWP/HWPX, Word, Excel, PowerPoint, TXT, CSV, XML, ZIP 등 처리
+- 500자 Chunk, 100자 overlap
+- `text-embedding-3-small`
+- 공고별 Chroma 인덱스
+- 최대 30개 후보 검색, 관련도 0.2 이상 선택, 부족하면 상위 5개 보완
+- 검색 Chunk의 원문 페이지·문단 복원
+- `gpt-4o-mini`, `temperature=0`
+- 챗봇 최대 출력 800 completion tokens
+- AI 분석 최대 출력 3,500 completion tokens
+- 챗봇 답변과 출처 제공
+- 회사정보와 공고문을 대조한 구조화 AI 분석
+- 분석 결과 저장과 PDF 다운로드
 
-확인된 쿼리 조건:
+## 4. 2026-07-19 완료한 작업
 
-- `page`, `page_size`
-- `q`
-- `keywords`
-- `regions`
-- `deadline_sort=asc|desc`
+### 4.1 로그인 필요 화면 통일
 
-### 관심 공고
+- 회사정보, 추천공고, 저장공고·AI분석을 비로그인 상태로 열었을 때 같은 디자인을 사용하도록 통일
+- 공통 컴포넌트: `web/components/auth/LoginRequiredNotice.tsx`
+- 인증 토큰이 없거나 API가 401/403을 반환하면 동일한 안내와 로그인 버튼 표시
 
-- 관심 공고 저장, 목록 조회, 저장 취소 구현
-- `SaveBidButton`, `SavedBidBoard` 프론트 컴포넌트 추가
+### 4.2 회사정보 문구와 입력 UI
 
-API:
+회사 프로필 안내 문구를 다음으로 변경했다.
 
-- `GET/POST /api/saved-bids/`
-- `DELETE /api/saved-bids/<공고번호>/`
+> 회사정보를 입력해주세요. 상세히 입력할 수록 입찰 분석률이 높아지니 최대한 상세히 작성해 주세요.
 
-### 회사 맞춤 추천
+- 필수 키워드와 관심 키워드를 화면에서는 `찾는 공고 키워드` 하나로 통합
+- 기존 DB의 두 필드 값은 화면과 추천 로직에서 합쳐 사용해 이전 데이터와 호환
+- 수정 후에는 새 입력값을 `preferred_keywords`에 저장하고 `required_keywords`는 빈 값으로 정리
+- 추천·검색·AI 분석도 통합된 키워드 목록을 사용
+- 희망 지역을 선택하지 않으면 `전체 지역`으로 표시
+- 지역 선택 목록 최상단에 `전체 지역` 추가
+- 회사정보 요약 화면에서도 지역 미입력 시 `전체 지역` 표시
+- 추천 화면 하단의 “규칙 기반이며 낙찰확률이 아님…” 안내 문구 삭제
 
-- 회사 프로필과 공고 조건을 비교하는 추천 서비스 구현
-- 사용자별 추천 결과와 매칭 근거 저장
-- 추천 실행 관리 명령 `match_recommendations` 추가
-- 추천 공고 대시보드 구현
-- 기존 `/recommended-bids/`는 호환용으로 남기고 화면에서는 `/recommendations/` 사용
+관련 파일:
 
-실행:
+- `web/components/companyForm/CompanyForm.tsx`
+- `web/components/companyForm/CompanyProfile.tsx`
+- `web/components/ui/RegionSelector.tsx`
+- `web/lib/companyKeywords.ts`
+- `server/bids/services/recommendation.py`
+- `server/bids/services/rag/analysis.py`
+- `server/bids/views.py`
+
+### 4.3 추천 점수 기준 변경
+
+현재 추천 점수:
+
+| 조건 | 점수 |
+|---|---:|
+| 공고명 키워드 첫 1개 일치 | 40점 |
+| 공고명 추가 키워드 | 개당 10점, 공고명 최대 60점 |
+| 업종·발주기관·수요기관 키워드 첫 1개 일치 | 10점 |
+| 업종·기관 추가 키워드 | 개당 5점, 해당 영역 최대 15점 |
+| 선택한 업무 구분 일치 | 10점 |
+| 희망 지역 일치 또는 전국 참가 가능 | 10점 |
+| 희망 금액 범위 포함 | 5점 |
+
+중요 규칙:
+
+- 찾는 공고 키워드가 하나도 일치하지 않으면 추천하지 않음
+- 제외 키워드가 포함되면 추천하지 않음
+- 선택한 업무 구분, 희망 지역, 희망 금액 범위를 벗어나면 추천하지 않음
+- 최소 추천 점수는 30점
+- 최대 10건 저장
+- 동점 정렬은 점수, 공고명 일치 개수, 최신 등록일, 마감일 순서
+- 공고명 일치 개수를 저장하기 위해 `RecommendedBid.title_match_count`와 migration `0009` 추가
+
+### 4.4 공고 목록 UI 개선
+
+- 공고명은 가능한 한 단어 중간에서 끊지 않고 단어 단위로 다음 줄에 배치
+- `원문` 버튼을 제목 텍스트 흐름에 붙여 표시
+- 제목과 원문 버튼이 다음 줄로 내려가도 불필요한 들여쓰기 공간이 생기지 않도록 수정
+- 일반 공고, 추천 공고, 저장 공고에 같은 방식 적용
+- 일반 공고 목록의 구분 열을 줄이고 공고명 영역을 넓힘
+- 참가 지역은 최대 두 줄의 짧은 미리보기로 표시
+- 지역이 길거나 여러 개인 경우 마우스를 올리거나 포커스하면 전체 지역 툴팁 표시
+
+관련 파일:
+
+- `web/components/bids/BidTable.tsx`
+- `web/components/bids/BidDetailModal.tsx`
+- `web/components/recommendations/RecommendedBidBoard.tsx`
+- `web/components/savedBids/SavedBidBoard.tsx`
+
+### 4.5 공고 동기화 상태 유지
+
+- 공고 새로고침 요청과 상태를 `web/lib/bidSync.ts`의 모듈 상태로 분리
+- 입찰공고 목록에서 업데이트를 시작하고 Next.js 내부의 다른 페이지로 이동해도 요청과 로딩 상태가 계속 유지됨
+- 다시 공고 목록으로 돌아오면 진행 상태를 구독하고, 완료되면 화면을 새로 갱신
+- 같은 브라우저 탭의 SPA 페이지 이동을 대상으로 함
+- 브라우저 전체 새로고침, 탭 종료, 개발 서버 재시작까지 영구 유지하는 구조는 아님
+
+### 4.6 OpenAI 객체 생성 시점 개선
+
+- Django가 AI 기능을 사용하지 않는 테스트를 실행할 때 OpenAI Key가 없어도 import 단계에서 실패하지 않도록 변경
+- `ChatOpenAI` 객체를 모듈 import 시점이 아니라 실제 채팅·분석 실행 시점에 생성
+- 관련 파일: `server/bids/services/rag/chatbot.py`, `server/bids/services/rag/analysis.py`
+
+### 4.7 과제 문서
+
+다음 문서를 작성했다.
+
+- `docs/BID2_과제_설계_문서.md`
+  - React, Next.js, Django 역할
+  - 전체 데이터 흐름
+  - OpenAI 설정
+  - Persona, Prompt, Prompt 설계 의도
+  - LangChain Chain, Retriever, Output Parser
+  - RAG 세부 구조와 개선 과정
+- `docs/BID2_프로젝트_폴더_구조.md`
+  - 실제 CLI 트리 형태의 전체 프로젝트 구조
+  - 각 폴더와 주요 파일의 역할
+- `docs/BID2_과제_요구사항_점검표.md`
+  - 과제 PDF 요구사항과 현재 구현 대조
+  - 완료, 부분 완료, 미완료 구분
+  - 제출 전 필수 보완 항목과 체크리스트
+
+## 5. 2026-07-19 마지막 검증 결과
+
+오늘 변경 후 확인한 결과:
+
+- Django migration 확인 및 적용: 통과
+- Django `manage.py check`: 통과
+- 백엔드 테스트: **68개 전체 통과**
+- 프론트엔드 `npm run build`: 통과
+- 기존 65개에서 추천 점수·키워드 통합 관련 테스트가 추가되어 현재 68개
+
+다음 컴퓨터에서도 환경 차이를 확인하기 위해 아래 명령을 다시 실행한다.
 
 ```powershell
-cd server
-.\venv\Scripts\python.exe manage.py match_recommendations
+cd <저장소 경로>\server
+.\venv\Scripts\python.exe manage.py migrate
+.\venv\Scripts\python.exe manage.py check
+.\venv\Scripts\python.exe manage.py test -v 2
+
+cd ..\web
+npm install
+npm run build
 ```
 
-API:
-
-- `GET /api/recommendations/`
-- `GET /api/recommended-bids/` (기존 주소 호환용)
-
-### AI 문서 검색, 채팅, 분석과 PDF
-
-- 나라장터 공고 첨부파일 조회 및 다운로드 구현
-- PDF, HWP/HWPX 및 여러 문서 형식의 텍스트 추출 처리 추가
-- 압축파일 안전 해제와 문서 분할 처리 추가
-- 공고별 Chroma 벡터 저장소와 OpenAI Embedding 기반 검색 구현
-- 공고 문서를 근거로 질문하는 AI 채팅 구현
-- 회사 프로필을 반영한 구조화된 공고 분석 구현
-- 저장된 분석 결과를 PDF로 내려받는 기능 구현
-- 프론트에 채팅창, 채팅 버튼, 분석 보고서 화면 추가
-
-API:
-
-- `POST /api/bids/<공고번호>/chat/`
-- `GET/POST /api/bids/<공고번호>/analysis/`
-- `GET /api/bids/<공고번호>/analysis/pdf/`
-
-### Windows 예약 작업
-
-- `server/scripts/register_bid_sync_task.ps1`
-  - 나라장터 공고 수집: 매일 08:00~18:00 매시간
-- `server/scripts/register_recommendation_task.ps1`
-  - 회사별 추천 매칭: 매일 18:10
-
-예약 작업은 각 컴퓨터에서 별도로 등록해야 하며, Git pull만으로 자동 등록되지는 않는다.
-
-### 테스트
-
-- `server/bids/tests.py`에 현재 테스트 함수 65개가 있음
-- 인증, 회사 프로필, 추천, 문서 추출/검색, 채팅, 공고 목록/수집, 관심 공고, 분석 등을 검사함
-- 내일 실제 환경에서 전체 테스트를 다시 실행해 최종 결과를 확인할 것
-
-## 4. 집 컴퓨터 환경 준비
-
-Git에는 일반적으로 `.env`, 가상환경, 로컬 DB, Node 모듈, 비밀키가 포함되지 않는다.
+## 6. 실행 방법
 
 ### 백엔드
 
 ```powershell
-cd D:\mbca_home\projects\bid2\server
-
+cd <저장소 경로>\server
 python -m venv venv
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 .\venv\Scripts\python.exe manage.py migrate
 .\venv\Scripts\python.exe manage.py check
-.\venv\Scripts\python.exe manage.py test -v 2
 .\venv\Scripts\python.exe manage.py runserver
 ```
 
-`server/.env`에 필요한 비밀값을 설정한다. 실제 값은 Git에 올리지 않는다.
+`server/.env`에는 로컬에서 필요한 환경변수를 설정한다. 실제 값은 Git에 올리지 않는다.
 
 ```dotenv
-G2B_API_KEY=<나라장터 API 키>
-OPENAI_API_KEY=<OpenAI API 키>
-```
-
-DB가 비어 있다면 먼저 적은 범위로 시험 수집한다.
-
-```powershell
-.\venv\Scripts\python.exe manage.py sync_bids --max-pages 2
+G2B_API_KEY=<로컬에서 설정>
+OPENAI_API_KEY=<로컬에서 설정>
 ```
 
 ### 프론트엔드
 
 ```powershell
-cd D:\mbca_home\projects\bid2\web
+cd <저장소 경로>\web
 npm install
-npm run build
 npm run dev
 ```
 
 `web/.env.local` 예시:
 
 ```dotenv
-BID_API_BASE_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 ```
 
 접속 주소:
 
-- 프론트엔드: `http://localhost:3000`
-- Django API/관리자: `http://127.0.0.1:8000`
+- 웹: `http://localhost:3000`
+- Django API: `http://127.0.0.1:8000`
+- Django 관리자: `http://127.0.0.1:8000/admin/`
 
-## 5. 내일 검증할 체크리스트
+## 7. 계정과 데이터 주의사항
 
-- [ ] `git status`가 깨끗하고 `origin/main`과 동일한지 확인
-- [ ] 마이그레이션 `0003`~`0008` 적용
-- [ ] Django `check` 통과
-- [ ] 백엔드 테스트 65개 전체 실행 및 결과 기록
-- [ ] 프론트 `npm run build` 통과
-- [ ] 회원가입 → 로그인 → 로그아웃 확인
-- [ ] 회사 프로필 저장/수정 확인
-- [ ] 공고 목록, 검색, 키워드/지역 필터, 정렬 확인
-- [ ] 관심 공고 저장/취소 확인
-- [ ] `match_recommendations` 실행 후 추천 목록 확인
-- [ ] 실제 첨부 문서가 있는 공고에서 AI 채팅 확인
-- [ ] AI 분석 생성과 PDF 다운로드 확인
-- [ ] 필요할 경우 Windows 예약 작업 등록
+- 학원 DB에 있는 `test1` 계정은 사용자가 만든 기존 테스트 계정이다.
+- **`test1`의 비밀번호, 권한, 프로필, 토큰, 저장 공고 등 어떤 데이터도 임의로 변경하거나 삭제하지 않는다.**
+- 집 컴퓨터에서는 별도 계정을 만들어 사용하기로 했다.
+- SQLite DB와 회원 데이터는 컴퓨터마다 다를 수 있다.
+- Git pull로 다른 컴퓨터의 로컬 DB나 계정이 자동 복사되지 않는다.
+- 로그인 문제를 진단할 때 계정을 바로 변경하지 말고, 먼저 사용 중인 DB, 서버 경로, API 주소, 토큰 상태를 확인한다.
 
-## 6. 알려진 주의사항
+## 8. 과제 제출 기준 검토 결과
 
-- Next.js 실행 로그에 `EADDRINUSE: address already in use :::3000` 오류가 한 번 있었다. 다시 발생하면 기존 3000번 포트 프로세스를 종료하거나 다른 포트로 실행한다.
-- OpenAI 기능은 API 키와 네트워크가 필요하며 호출 비용이 발생할 수 있다.
-- 나라장터 API 데이터와 수집 건수는 실행 시점마다 달라질 수 있다.
-- 첨부 문서 형식에 따라 HWP/PDF/압축파일 추출 결과가 달라질 수 있으므로 실제 공고로 확인한다.
-- `.env`, API 키, `venv`, `node_modules`, 로컬 DB, 다운로드 문서, Chroma 데이터, 실행 로그가 Git에 포함되지 않도록 확인한다.
-- 예약 작업은 실행 경로의 `server\venv\Scripts\python.exe`를 사용하므로 가상환경을 먼저 만들어야 한다.
+핵심 구현 상태:
 
-## 7. 다음 우선순위
+- 실제 문제 해결 AI 서비스: 완료
+- Persona, Role, Prompt 규칙: 완료
+- LangChain 기능 2개 이상: 완료
+- RAG 전체 과정: 완료
+- OpenAI, Embedding, Chroma, React + Backend: 완료
+- 파라미터 설정: 완료
 
-1. 집 환경에서 pull 후 백엔드 테스트 65개와 프론트 빌드 실행
-2. 전체 사용자 흐름을 브라우저에서 끝까지 확인
-3. AI 채팅/분석/PDF를 실제 나라장터 첨부 문서로 검증
-4. 실패 항목이 있으면 한 기능씩 원인 진단 후 수정
-5. 검증이 끝나면 이 문서에 결과와 다음 작업을 다시 기록하고 커밋
+제출 전에 필요한 항목:
 
-## 8. 작업 종료 시 기록 규칙
+1. 파라미터 비교 실험 2종 이상과 결과표
+2. 실제 LangChain `system`과 `human` 메시지 역할 분리
+3. 엄격한 채점에 대비한 LLM Function Calling Tool 1개
+4. 실행 화면 5종
+   - 메인 화면
+   - 질의응답
+   - Tool 실행
+   - RAG 검색 결과
+   - 최종 응답
+5. 루트 README와 `.env.example` 변수명 정리
+6. 메인 화면 문구와 실제 기능 일치
 
-다음 작업을 마칠 때 이 문서에 반드시 남긴다.
+주의할 현재 불일치:
+
+- 메인 화면에 `제안서 자동 생성`, `제안서 초안 작성`, `낙찰성공률 분석`이 현재 기능처럼 적혀 있음
+- 실제 제안서 제작 버튼은 비활성화 상태
+- 현재 AI 점수는 낙찰확률이 아니라 회사정보와 공고 조건의 적합도
+- 제출 전 문구를 현재 구현에 맞추거나 기능을 구현해야 함
+
+자세한 판단 근거는 `docs/BID2_과제_요구사항_점검표.md`를 참고한다.
+
+## 9. 다음 우선순위
+
+한 번에 전부 진행하지 말고 다음 순서대로 한 항목씩 작업한다.
+
+1. 학원 컴퓨터에서 pull 후 migration, Django check, 백엔드 68개 테스트, 프론트 build 재검증
+2. 브라우저에서 로그인, 회사정보, 공고 검색, 추천, 저장, AI 채팅, AI 분석 흐름 확인
+3. Prompt를 실제 `system`과 `human` 메시지로 분리하고 테스트
+4. 간단한 Function Calling Tool 1개 설계·구현
+5. Temperature와 max token 비교 실험 및 결과표 작성
+6. 제출용 실행 화면 5종 캡처
+7. 루트 README와 환경변수 예시 정리
+8. 메인 화면의 미구현 기능 문구 정리
+9. 전체 검증 후 문서와 HANDOFF 갱신, 커밋, push
+
+## 10. 알려진 주의사항
+
+- OpenAI 기능은 API Key와 네트워크가 필요하며 호출 비용이 발생할 수 있다.
+- 나라장터 API 결과와 수집 건수는 실행 시점마다 달라질 수 있다.
+- 첨부 문서 형식에 따라 텍스트 추출 결과가 달라질 수 있으므로 실제 공고로 확인한다.
+- `.env`, API Key, `venv`, `node_modules`, SQLite DB, 다운로드 첨부문서, Chroma DB, 실행 로그는 Git에 포함하지 않는다.
+- 3000번 또는 8000번 포트가 이미 사용 중이면 기존 BID2 서버 프로세스인지 먼저 확인한 뒤 처리한다.
+- 공고 동기화 상태 유지는 같은 브라우저 탭의 Next.js 페이지 이동에 대한 기능이다. 전체 새로고침까지 보존되는 영구 작업 큐는 아니다.
+- 예약 작업은 컴퓨터마다 따로 등록해야 하며 Git pull만으로 자동 등록되지 않는다.
+
+## 11. 다음 작업 종료 시 기록할 내용
+
+작업을 마칠 때 이 문서에 반드시 기록한다.
 
 - 완료한 기능
-- 변경한 주요 파일
-- 실행한 테스트와 정확한 결과
+- 변경한 파일
+- migration과 Django check 결과
+- 실행한 백엔드 테스트 개수와 결과
+- 프론트 build 결과
+- 브라우저에서 직접 확인한 기능
 - 아직 남은 문제
 - 다음 작업의 첫 단계
-- 마지막 커밋 해시
+- 마지막 커밋 해시와 push 여부
 
-작업 종료 명령:
+커밋 전 확인 예시:
 
 ```powershell
 git status
-git add HANDOFF.md <오늘 변경한 파일들>
-git commit -m "작업 내용 요약"
-git push
+git diff --check
+git diff --stat
 ```
+
+사용자가 직접 커밋할 예정이므로 Codex는 별도 요청 없이 임의로 commit 또는 push하지 않는다.
