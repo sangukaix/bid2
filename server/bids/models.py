@@ -1,5 +1,10 @@
+from pathlib import Path
+import uuid
+
 from django.conf import settings
 from django.db import models
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 
 
 class CompanyProfile(models.Model):
@@ -32,6 +37,7 @@ class CompanyProfile(models.Model):
 
     # 회사 자격과 수행 역량
     industry = models.CharField(max_length=200)
+    related_industries = models.TextField(blank=True)  # 대표 업종 외 관련 업종을 쉼표로 구분해 저장
     company_type = models.CharField(
         max_length=20,
         choices=CompanyType.choices,
@@ -64,6 +70,41 @@ class CompanyProfile(models.Model):
 
     def __str__(self):
         return self.company_name
+
+
+def company_document_upload_path(instance, filename):
+    """사용자별 폴더에 충돌하지 않는 파일명으로 회사 문서를 저장합니다."""
+
+    extension = Path(filename).suffix.lower()
+    return f"company_documents/user_{instance.user_id}/{uuid.uuid4().hex}{extension}"
+
+
+class CompanyDocument(models.Model):
+    class DocumentType(models.TextChoices):
+        PROPOSAL = "proposal", "제안서"
+        COMPANY_INTRODUCTION = "company_introduction", "회사소개서"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="company_documents",
+    )
+    file = models.FileField(upload_to=company_document_upload_path)
+    original_name = models.CharField(max_length=255)
+    document_type = models.CharField(max_length=30, choices=DocumentType.choices)
+    target_company = models.CharField(max_length=200, blank=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-uploaded_at",)
+
+    def delete(self, *args, **kwargs):
+        stored_file = self.file
+        super().delete(*args, **kwargs)
+        stored_file.delete(save=False)  # DB 기록 삭제 후 실제 업로드 파일도 함께 삭제
+
+    def __str__(self):
+        return self.original_name
 
 
 class BidNotice(models.Model):
@@ -224,3 +265,49 @@ class BidChatMessage(models.Model):
 
     def __str__(self):
         return f"{self.saved_bid} - {self.get_role_display()}"
+
+
+def bid_proposal_upload_path(instance, filename):
+    """생성된 제안서를 사용자별 폴더에 안전한 파일명으로 저장합니다."""
+
+    extension = Path(filename).suffix.lower()
+    return f"generated_proposals/user_{instance.saved_bid.user_id}/{uuid.uuid4().hex}{extension}"
+
+
+class BidProposal(models.Model):
+    class OutputFormat(models.TextChoices):
+        DOCX = "docx", "Word"
+        PPTX = "pptx", "PowerPoint"
+
+    saved_bid = models.OneToOneField(
+        SavedBid,
+        on_delete=models.CASCADE,
+        related_name="proposal",
+    )  # 회원이 저장한 공고 하나와 생성 제안서 하나를 연결
+    source_document = models.ForeignKey(
+        CompanyDocument,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="generated_proposals",
+    )  # 문체와 디자인을 참고한 기존 회사 제안서
+    output_format = models.CharField(max_length=10, choices=OutputFormat.choices)
+    template_mode = models.CharField(max_length=30, default="new_document")
+    strategy = models.JSONField(default=dict)
+    draft = models.JSONField(default=dict)
+    generated_file = models.FileField(upload_to=bid_proposal_upload_path)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.saved_bid} 제안서"
+
+
+@receiver(post_delete, sender=BidProposal)
+def delete_bid_proposal_file(sender, instance, **kwargs):
+    """저장 공고가 삭제되면 생성된 제안서 파일도 함께 정리합니다."""
+
+    if instance.generated_file:
+        instance.generated_file.delete(save=False)

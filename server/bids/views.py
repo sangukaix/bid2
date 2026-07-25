@@ -1,6 +1,8 @@
 from datetime import timedelta
 from io import StringIO
+from pathlib import Path
 
+from django.core.files.base import ContentFile
 from django.core.management import call_command
 from django.core.paginator import EmptyPage, Paginator
 from django.db.models import Count, F, Max, Q
@@ -9,13 +11,15 @@ from django.http import FileResponse, JsonResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.authtoken.models import Token
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, parser_classes, permission_classes
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import BidAnalysis, BidChatMessage, BidNotice, CompanyProfile, RecommendedBid, SavedBid
-from .serializers import CompanyProfileSerializer, LoginSerializer, SignupSerializer
-from .services.recommendation import get_profile_keywords
+from .models import BidAnalysis, BidChatMessage, BidNotice, BidProposal, CompanyDocument, CompanyProfile, RecommendedBid, SavedBid
+from .serializers import CompanyDocumentSerializer, CompanyProfileSerializer, LoginSerializer, SignupSerializer
+from .services.business_registration import extract_business_registration
+from .services.recommendation import delete_expired_recommendations, get_profile_keywords
 
 
 DEFAULT_PAGE_SIZE = 20
@@ -170,6 +174,86 @@ def company_profile(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def company_document_list(request):
+    documents = CompanyDocument.objects.filter(user=request.user)
+
+    if request.method == "GET":
+        serializer = CompanyDocumentSerializer(
+            documents,
+            many=True,
+            context={"request": request},
+        )
+        return Response({"count": documents.count(), "items": serializer.data})
+
+    if documents.count() >= 10:
+        return Response(
+            {"error": "회사 문서는 최대 10개까지 업로드할 수 있습니다."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    serializer = CompanyDocumentSerializer(
+        data=request.data,
+        context={"request": request},
+    )
+    if serializer.is_valid():
+        uploaded_file = serializer.validated_data["file"]
+        document = serializer.save(
+            user=request.user,
+            original_name=uploaded_file.name,
+        )
+        response_serializer = CompanyDocumentSerializer(
+            document,
+            context={"request": request},
+        )
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def company_document_delete(request, document_id):
+    document = CompanyDocument.objects.filter(
+        id=document_id,
+        user=request.user,
+    ).first()
+    if document is None:
+        return Response(
+            {"error": "삭제할 회사 문서를 찾을 수 없습니다."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    document.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def business_registration_extract(request):
+    """사업자등록증에 실제 적힌 회사 기본정보만 추출합니다."""
+
+    uploaded_file = request.FILES.get("file")
+    if uploaded_file is None:
+        return Response(
+            {"error": "사업자등록증 파일을 선택해 주세요."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        return Response(extract_business_registration(uploaded_file))
+    except ValueError as error:
+        return Response({"error": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        return Response(
+            {"error": "사업자등록증을 분석하지 못했습니다. 파일 상태를 확인해 주세요."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+
 def parse_positive_integer(value, default, name):
     if value is None:
         return default
@@ -233,6 +317,7 @@ def serialize_saved_bid(saved_bid):
     item["savedAt"] = saved_bid.created_at
     item["hasChat"] = bool(saved_bid.chat_messages.all())
     item["hasAnalysis"] = hasattr(saved_bid, "analysis")
+    item["hasProposal"] = hasattr(saved_bid, "proposal")
     return item
 
 
@@ -251,6 +336,8 @@ def serialize_recommendation(recommendation):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def stored_recommendation_list(request):
+    delete_expired_recommendations(request.user)  # 추천 페이지를 열 때 지난 공고를 DB에서 정리
+
     recommendations = RecommendedBid.objects.filter(
         user=request.user,
         bid_notice__is_active=True,
@@ -280,7 +367,7 @@ def stored_recommendation_list(request):
 def saved_bid_list(request):
     if request.method == "GET":
         saved_bids = SavedBid.objects.filter(user=request.user).select_related(
-            "bid_notice", "analysis"
+            "bid_notice", "analysis", "proposal"
         ).prefetch_related("chat_messages")  # 사용 여부까지 한 번에 조회
         return Response(
             {
@@ -809,4 +896,206 @@ def bid_analysis_pdf(request, bid_ntce_no):
         as_attachment=True,
         filename=f"bid-analysis-{bid_ntce_no}.pdf",
         content_type="application/pdf",
+    )
+
+
+def serialize_bid_proposal(proposal):
+    return {
+        "id": proposal.id,
+        "output_format": proposal.output_format,
+        "template_mode": proposal.template_mode,
+        "source_document": {
+            "id": proposal.source_document_id,
+            "original_name": (
+                proposal.source_document.original_name
+                if proposal.source_document
+                else "삭제된 원본 문서"
+            ),
+            "target_company": (
+                proposal.source_document.target_company
+                if proposal.source_document
+                else ""
+            ),
+            "uploaded_at": (
+                proposal.source_document.uploaded_at
+                if proposal.source_document
+                else None
+            ),
+        },
+        "strategy": proposal.strategy,
+        "draft": proposal.draft,
+        "created_at": proposal.created_at,
+        "updated_at": proposal.updated_at,
+        "download_url": (
+            f"/api/bids/{proposal.saved_bid.bid_notice.bid_ntce_no}/proposal/download/"
+        ),
+    }
+
+
+def serialize_proposal_source(document):
+    return {
+        "id": document.id,
+        "original_name": document.original_name,
+        "target_company": document.target_company,
+        "uploaded_at": document.uploaded_at,
+    }
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def bid_proposal(request, bid_ntce_no):
+    """저장 공고의 맞춤형 제안서를 생성하거나 기존 결과를 조회합니다."""
+
+    saved_bid = (
+        SavedBid.objects.filter(
+            user=request.user,
+            bid_notice__bid_ntce_no=bid_ntce_no,
+        )
+        .select_related("bid_notice", "proposal__source_document")
+        .first()
+    )
+    if saved_bid is None:
+        return Response(
+            {"error": "먼저 공고를 저장해 주세요."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    source_documents = CompanyDocument.objects.filter(
+        user=request.user,
+        document_type=CompanyDocument.DocumentType.PROPOSAL,
+    )
+    existing_proposal = BidProposal.objects.filter(saved_bid=saved_bid).select_related(
+        "source_document",
+        "saved_bid__bid_notice",
+    ).first()
+
+    if request.method == "GET":
+        return Response(
+            {
+                "proposal": (
+                    serialize_bid_proposal(existing_proposal)
+                    if existing_proposal
+                    else None
+                ),
+                "source_documents": [
+                    serialize_proposal_source(document)
+                    for document in source_documents
+                ],
+            }
+        )
+
+    if existing_proposal is not None:
+        return Response(
+            {"proposal": serialize_bid_proposal(existing_proposal)}
+        )  # 이미 만든 결과를 재사용해 중복 OpenAI 비용 방지
+
+    if not source_documents.exists():
+        return Response(
+            {"error": "회사정보에서 기존 제안서를 1개 이상 등록해 주세요."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        source_document_id = int(request.data.get("source_document_id", ""))
+    except (TypeError, ValueError):
+        return Response(
+            {"error": "참고할 기존 제안서를 선택해 주세요."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    source_document = source_documents.filter(id=source_document_id).first()
+    if source_document is None:
+        return Response(
+            {"error": "선택한 회사 제안서를 찾을 수 없습니다."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    output_format = str(request.data.get("output_format", "")).lower()
+    if output_format not in {
+        BidProposal.OutputFormat.DOCX,
+        BidProposal.OutputFormat.PPTX,
+    }:
+        return Response(
+            {"error": "출력 형식은 Word 또는 PowerPoint만 선택할 수 있습니다."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    source_extension = Path(source_document.original_name).suffix.lower()
+    if source_extension in {".hwp", ".hwpx"} and output_format != BidProposal.OutputFormat.DOCX:
+        return Response(
+            {"error": "HWP 또는 HWPX 원본의 결과 형식은 Word만 선택할 수 있습니다."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    profile = CompanyProfile.objects.filter(user=request.user).first()
+    if profile is None:
+        return Response(
+            {"error": "제안서 생성 전에 회사 정보를 입력해 주세요."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        from .services.rag.proposal import generate_bid_proposal
+
+        result = generate_bid_proposal(
+            saved_bid=saved_bid,
+            profile=profile,
+            source_document=source_document,
+            output_format=output_format,
+        )
+    except ValueError as error:
+        return Response({"error": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        return Response(
+            {"error": "맞춤형 제안서를 생성하지 못했습니다."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    proposal = BidProposal(
+        saved_bid=saved_bid,
+        source_document=source_document,
+        output_format=output_format,
+        template_mode=result["template_mode"],
+        strategy=result["strategy"],
+        draft=result["draft"],
+    )
+    proposal.generated_file.save(
+        result["filename"],
+        ContentFile(result["file_bytes"]),
+        save=False,
+    )
+    proposal.save()
+
+    return Response(
+        {"proposal": serialize_bid_proposal(proposal)},
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def bid_proposal_download(request, bid_ntce_no):
+    proposal = (
+        BidProposal.objects.filter(
+            saved_bid__user=request.user,
+            saved_bid__bid_notice__bid_ntce_no=bid_ntce_no,
+        )
+        .select_related("saved_bid__bid_notice")
+        .first()
+    )
+    if proposal is None or not proposal.generated_file:
+        return Response(
+            {"error": "생성된 제안서가 없습니다."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    content_types = {
+        BidProposal.OutputFormat.DOCX: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        BidProposal.OutputFormat.PPTX: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+    return FileResponse(
+        proposal.generated_file.open("rb"),
+        as_attachment=True,
+        filename=f"proposal-{bid_ntce_no}.{proposal.output_format}",
+        content_type=content_types[proposal.output_format],
     )

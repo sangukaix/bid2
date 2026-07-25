@@ -65,7 +65,7 @@ export default async function BidList({ filters }: BidListProps) { // 입찰 목
 
   return (
     <div className="mt-6 space-y-4">
-      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div className="relative z-20 overflow-visible rounded-lg border border-slate-200 bg-white">
         <BidSummary summary={data?.summary ?? emptySummary} />
         <BidFilters
           filters={filters}

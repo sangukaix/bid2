@@ -22,7 +22,68 @@ export interface BidNotice { // 입찰공고 한 건의 데이터 형태를 정�
   savedAt?: string; // 사용자가 공고를 저장한 시간
   hasChat?: boolean; // 이 공고에서 저장된 AI 채팅이 있는지 여부
   hasAnalysis?: boolean; // 이 공고에서 저장된 AI 분석이 있는지 여부
+  hasProposal?: boolean; // 이 공고에서 생성한 맞춤형 제안서가 있는지 여부
 }
+
+export type ProposalSourceDocument = {
+  id: number;
+  original_name: string;
+  target_company: string;
+  uploaded_at: string;
+};
+
+export type ProposalStrategy = {
+  bid_summary: string;
+  client_needs: string[];
+  win_themes: string[];
+  differentiators: string[];
+  company_strengths: string[];
+  gaps_and_mitigations: string[];
+};
+
+export type ProposalSection = {
+  title: string;
+  purpose: string;
+  content: string;
+  key_points: string[];
+  company_evidence: string[];
+  source_numbers: number[];
+};
+
+export type BidProposalData = {
+  id: number;
+  output_format: "docx" | "pptx";
+  template_mode: "original_theme" | "content_reference";
+  source_document: {
+    id: number | null;
+    original_name: string;
+    target_company: string;
+    uploaded_at: string | null;
+  };
+  strategy: ProposalStrategy;
+  draft: {
+    proposal_title: string;
+    subtitle: string;
+    executive_summary: string;
+    sections: ProposalSection[];
+    final_checklist: string[];
+    document_processing?: {
+      processed_files: string[];
+      failed_files: Array<{ file_name: string; reason: string }>;
+      chunk_count: number;
+      company_intro_files?: string[];
+      company_intro_failures?: Array<{ file_name: string; reason: string }>;
+    };
+  };
+  created_at: string;
+  updated_at: string;
+  download_url: string;
+};
+
+export type BidProposalResponse = {
+  proposal: BidProposalData | null;
+  source_documents?: ProposalSourceDocument[];
+};
 
 export interface BidSummaryData {
   total: number;

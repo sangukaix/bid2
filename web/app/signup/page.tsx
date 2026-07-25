@@ -4,7 +4,7 @@ import SignupForm from "@/components/auth/SignupForm";
 
 export default function SignupPage() {
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-950">
+    <main className="min-h-screen bg-transparent text-slate-950">
       <Header />
       <section className="mx-auto max-w-md px-6 py-16">
         <h1 className="text-2xl font-bold">회원가입</h1>

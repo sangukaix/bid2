@@ -3,7 +3,9 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { parseRegions, REGION_OPTIONS } from "@/components/ui/RegionSelector";
+import BusinessTypeDropdown from "@/components/ui/BusinessTypeDropdown";
+import RegionDropdown from "@/components/ui/RegionDropdown";
+import { parseRegions } from "@/components/ui/RegionSelector";
 import { getBidSyncState, startBidSync, subscribeBidSync } from "@/lib/bidSync";
 import { getCompanyKeywords, parseKeywordText } from "@/lib/companyKeywords";
 import type { BidSearchParams } from "@/types/bid";
@@ -19,6 +21,7 @@ type BidFiltersProps = {
 export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) {
   const router = useRouter();
   const [query, setQuery] = useState(filters.q ?? "");
+  const [businessType, setBusinessType] = useState(filters.business_type ?? "");
   const [keywords, setKeywords] = useState(() => parseKeywordText(filters.keywords));
   const [regions, setRegions] = useState(() => parseRegions(filters.regions ?? ""));
   const [savedKeywords, setSavedKeywords] = useState<string[]>([]); // 회사 정보에 저장된 원래 키워드
@@ -79,6 +82,11 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
   }
 
   function addRegion(region: string) {
+    if (region === "__all__") {
+      setRegions([]); // 전체 지역을 선택하면 기존 지역 조건을 모두 제거
+      return;
+    }
+
     if (region && !regions.includes(region)) {
       setRegions([...regions, region]); // 지역을 고르는 즉시 현재 검색 조건에 추가
     }
@@ -108,7 +116,7 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
       params.set("keywords", keywords.join(","));
       params.set("regions", regions.join(","));
     }
-    if (filters.business_type) params.set("business_type", filters.business_type);
+    if (businessType) params.set("business_type", businessType);
     if (filters.deadline_sort) params.set("deadline_sort", filters.deadline_sort);
 
     router.push(`/dashBoard/bidList${params.size ? `?${params}` : ""}`);
@@ -116,9 +124,18 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
 
   function resetFilters() {
     setQuery("");
+    setBusinessType("");
     setKeywords([]);
     setRegions([]);
-    router.push("/dashBoard/bidList?keywords=&regions=");
+    setKeywordInput("");
+    setSyncAuthError("");
+
+    const params = new URLSearchParams({
+      keywords: "",
+      regions: "",
+    }); // 빈 조건을 URL에 남겨 회사의 저장 조건이 자동으로 다시 들어오지 않게 함
+
+    router.push(`/dashBoard/bidList?${params}`); // 필터 없는 상태로 전체 공고를 즉시 다시 조회
   }
 
   function refreshBidNotices() {
@@ -158,65 +175,78 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
 
       {syncError && <p className="mt-2 text-xs text-red-600">{syncError}</p>}
 
-      <div className="mt-4 grid items-end gap-3 xl:grid-cols-[minmax(0,3.5fr)_minmax(0,3.5fr)_minmax(0,3fr)_72px]">
-        <div className="min-w-0">
-          <h2 className="mb-2 text-sm font-bold text-slate-950">나라장터 공고검색</h2>
-          <input
-            aria-label="공고명, 공고번호 또는 기관명 검색"
-            className="h-10 w-full min-w-0 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-500"
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="공고명, 공고번호, 기관명"
-            type="search"
-            value={query}
-          />
+      <div className="mt-4 w-full space-y-4 lg:w-[70%]">
+        <div className="grid gap-3 lg:grid-cols-2"> {/* 첫 줄: 회사에 저장된 검색 조건 */}
+          <div className="min-w-0">
+            <button className="mb-2 cursor-pointer text-xs font-semibold text-slate-500 transition-colors hover:text-slate-950 disabled:text-slate-300" disabled={savedKeywords.length === 0} onClick={loadSavedKeywords} type="button">
+              저장된 키워드 불러오기
+            </button>
+            <div className="flex min-h-10 min-w-0 flex-wrap items-center gap-1.5 rounded-md border border-slate-300 px-2 py-1 focus-within:border-blue-500">
+              {keywords.map((keyword) => (
+                <span className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-blue-50 px-2 text-xs font-semibold text-blue-700" key={keyword}>
+                  {keyword}
+                  <button aria-label={`${keyword} 키워드 삭제`} className="cursor-pointer" onClick={() => setKeywords(keywords.filter((item) => item !== keyword))} type="button">×</button>
+                </span>
+              ))}
+              <input
+                className="ml-auto h-8 w-28 shrink-0 border-0 px-1 text-right text-sm outline-none"
+                onChange={(event) => setKeywordInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addKeyword();
+                  }
+                }}
+                placeholder="키워드 추가"
+                value={keywordInput}
+              />
+              <button aria-label="검색 키워드 추가" className="h-7 w-7 shrink-0 cursor-pointer rounded-md text-lg text-slate-500 transition-colors hover:bg-slate-100" disabled={!keywordInput.trim()} onClick={addKeyword} title="검색 키워드 추가" type="button">+</button>
+            </div>
+          </div>
+
+          <div className="min-w-0">
+            <button className="mb-2 cursor-pointer text-xs font-semibold text-slate-500 transition-colors hover:text-slate-950 disabled:text-slate-300" disabled={savedRegions.length === 0} onClick={loadSavedRegions} type="button">
+              저장된 희망지역 불러오기
+            </button>
+            <div className="flex min-h-10 min-w-0 flex-wrap items-center gap-1.5 rounded-md border border-slate-300 px-2 py-1 focus-within:border-blue-500">
+              {regions.length === 0 && (
+                <span className="inline-flex h-7 shrink-0 items-center rounded-md bg-emerald-50 px-2 text-xs font-semibold text-emerald-700">
+                  전체 지역
+                </span>
+              )}
+              {regions.map((region) => (
+                <span className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-emerald-50 px-2 text-xs font-semibold text-emerald-700" key={region}>
+                  {region}
+                  <button aria-label={`${region} 지역 삭제`} className="cursor-pointer" onClick={() => setRegions(regions.filter((item) => item !== region))} type="button">×</button>
+                </span>
+              ))}
+              <div className="ml-auto min-w-24 shrink-0">
+                <RegionDropdown onSelect={addRegion} regions={regions} />
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div className="min-w-0">
-          <button className="mb-2 cursor-pointer text-xs font-semibold text-slate-500 transition-colors hover:text-slate-950 disabled:text-slate-300" disabled={savedKeywords.length === 0} onClick={loadSavedKeywords} type="button">
-            저장된 키워드 불러오기
-          </button>
-          <div className="flex min-h-10 min-w-0 flex-wrap items-center gap-1.5 rounded-md border border-slate-300 px-2 py-1 focus-within:border-blue-500">
-            {keywords.map((keyword) => (
-              <span className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-blue-50 px-2 text-xs font-semibold text-blue-700" key={keyword}>
-                {keyword}
-                <button aria-label={`${keyword} 키워드 삭제`} className="cursor-pointer" onClick={() => setKeywords(keywords.filter((item) => item !== keyword))} type="button">×</button>
-              </span>
-            ))}
+        <div className="grid items-end gap-3 lg:grid-cols-[minmax(0,1fr)_140px_72px]"> {/* 둘째 줄: 직접 검색 조건 */}
+          <div className="min-w-0">
+            <h2 className="mb-2 text-sm font-bold text-slate-950">나라장터 공고검색</h2>
             <input
-              className="h-8 min-w-20 flex-1 border-0 px-1 text-sm outline-none"
-              onChange={(event) => setKeywordInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  addKeyword();
-                }
-              }}
-              placeholder="키워드 추가"
-              value={keywordInput}
+              aria-label="공고명, 공고번호 또는 기관명 검색"
+              className="h-10 w-full min-w-0 rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-blue-500"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="공고명, 공고번호, 기관명"
+              type="search"
+              value={query}
             />
-            <button aria-label="검색 키워드 추가" className="h-7 w-7 shrink-0 cursor-pointer rounded-md text-lg text-slate-500 transition-colors hover:bg-slate-100" disabled={!keywordInput.trim()} onClick={addKeyword} title="검색 키워드 추가" type="button">+</button>
           </div>
-        </div>
 
-        <div className="min-w-0">
-          <button className="mb-2 cursor-pointer text-xs font-semibold text-slate-500 transition-colors hover:text-slate-950 disabled:text-slate-300" disabled={savedRegions.length === 0} onClick={loadSavedRegions} type="button">
-            저장된 희망지역 불러오기
-          </button>
-          <div className="flex min-h-10 min-w-0 flex-wrap items-center gap-1.5 rounded-md border border-slate-300 px-2 py-1 focus-within:border-blue-500">
-            {regions.map((region) => (
-              <span className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-emerald-50 px-2 text-xs font-semibold text-emerald-700" key={region}>
-                {region}
-                <button aria-label={`${region} 지역 삭제`} className="cursor-pointer" onClick={() => setRegions(regions.filter((item) => item !== region))} type="button">×</button>
-              </span>
-            ))}
-            <select className="h-8 min-w-20 flex-1 cursor-pointer border-0 bg-white px-1 text-sm text-slate-600 outline-none" onChange={(event) => addRegion(event.target.value)} value="">
-              <option value="">전체 지역</option>
-              {REGION_OPTIONS.map((region) => <option disabled={regions.includes(region)} key={region}>{region}</option>)}
-            </select>
+          <div className="min-w-0">
+            <span className="mb-2 block text-sm font-bold text-slate-950">구분</span>
+            <BusinessTypeDropdown onChange={setBusinessType} value={businessType} />
           </div>
-        </div>
 
-        <button className="h-10 cursor-pointer rounded-md bg-slate-950 text-sm font-semibold text-white transition-colors hover:bg-blue-700" type="submit">검색</button>
+          <button className="h-10 cursor-pointer rounded-md bg-slate-950 text-sm font-semibold text-white transition-colors hover:bg-blue-700" type="submit">검색</button>
+        </div>
       </div>
 
     </form>

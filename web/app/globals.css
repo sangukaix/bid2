@@ -1,8 +1,11 @@
 ﻿@import "tailwindcss"; /* Tailwind CSS 기능을 이 파일에서 사용할 수 있게 불러옵니다. */
 
 :root { /* 사이트 전체에서 공통으로 사용할 CSS 변수들을 정의하는 영역입니다. */
-  --background: #ffffff; /* 기본 배경색입니다. */
-  --foreground: #171717; /* 기본 글자색입니다. */
+  --background: #f3f6f8; /* 눈부심을 줄인 사이트 공통 배경색입니다. */
+  --foreground: #172033; /* 부드럽지만 선명한 기본 글자색입니다. */
+  --surface: #ffffff; /* 카드처럼 중요한 내용을 올리는 밝은 면입니다. */
+  --surface-soft: #f8fafc; /* 표 머리글과 보조 영역에 사용하는 색입니다. */
+  --line: #dce4ec; /* 영역을 구분하는 공통 경계선 색입니다. */
 }
 
 @theme inline { /* Tailwind v4에서 CSS 변수를 Tailwind 색상/폰트 이름으로 연결하는 설정입니다. */
@@ -20,6 +23,36 @@ body { /* 모든 페이지의 body 태그에 적용되는 기본 스타일입니
   background: var(--background); /* 위에서 만든 --background 값을 실제 배경색으로 사용합니다. */
   color: var(--foreground); /* 위에서 만든 --foreground 값을 실제 글자색으로 사용합니다. */
   font-family: Arial, Helvetica, sans-serif; /* 기본 글꼴을 지정합니다. */
+}
+
+/* 기존 Tailwind 구조는 유지하면서 전체 화면의 색 대비만 부드럽게 조정합니다. */
+.app-shell {
+  background: var(--background);
+}
+
+.app-shell .app-panel {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 4%), 0 8px 24px rgb(15 23 42 / 4%);
+}
+
+.app-shell .app-panel-soft {
+  border-color: var(--line);
+  background: var(--surface-soft);
+}
+
+/* 기존 페이지 카드에도 같은 표면색과 약한 깊이감을 적용합니다. */
+.app-shell :is(section, article, form, div)[class~="rounded-lg"][class~="border"][class~="bg-white"] {
+  border-color: var(--line);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 3%), 0 6px 18px rgb(15 23 42 / 3%);
+}
+
+.app-shell [class~="bg-slate-50"] {
+  background-color: var(--surface-soft);
+}
+
+.app-shell [class~="border-slate-200"] {
+  border-color: var(--line);
 }
 
 button:not(:disabled),

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import LoginRequiredNotice from "@/components/auth/LoginRequiredNotice";
+import CompanyDocuments from "@/components/companyForm/CompanyDocuments";
 import CompanyForm from "@/components/companyForm/CompanyForm";
 import { formatCompanyKeywords } from "@/lib/companyKeywords";
 import type { CompanyProfileData } from "@/types/company";
@@ -22,23 +23,86 @@ const bidTypeLabels: Record<string, string> = {
   construction: "공사",
 };
 
-type SummaryItemProps = {
+type InfoItemProps = {
   label: string;
   value: string;
-  full?: boolean;
 };
 
-function SummaryItem({ label, value, full = false }: SummaryItemProps) {
+function InfoItem({ label, value }: InfoItemProps) {
   return (
-    <div className={full ? "md:col-span-2" : ""}>
+    <div className="min-w-0">
       <dt className="text-xs font-semibold text-slate-500">{label}</dt>
-      <dd className="mt-1 whitespace-pre-line text-sm leading-6 text-slate-900">{value || "-"}</dd>
+      <dd className="mt-1 truncate text-sm font-medium text-slate-900">{value || "-"}</dd>
     </div>
   );
 }
 
 function formatAmount(value: number | null) {
   return value === null ? "-" : `${value.toLocaleString("ko-KR")}원`;
+}
+
+function formatStoredAmount(value: string) {
+  if (!value) return "-";
+  if (!/^[\d,\s원]+$/.test(value)) return value;
+
+  const digits = value.replace(/\D/g, "");
+  return digits ? `${digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}원` : "-";
+}
+
+function splitTags(value: string | undefined = "") {
+  return value
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseStructuredRows(value: string) {
+  return value
+    .split("\n")
+    .map((line) => line.split("|").map((item) => item.trim()))
+    .filter((row) => row.some(Boolean));
+}
+
+function DescriptionBlock({ title, value }: { title: string; value: string }) {
+  const lines = value.split("\n").map((line) => line.trim()).filter(Boolean);
+
+  return (
+    <article className="px-6 py-5">
+      <h3 className="text-sm font-bold text-slate-900">{title}</h3>
+      {lines.length > 0 ? (
+        <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-700">
+          {lines.map((line, index) => (
+            <li className="flex gap-2" key={`${line}-${index}`}>
+              <span aria-hidden="true" className="mt-2.5 h-1 w-1 shrink-0 rounded-full bg-blue-500" />
+              <span>{line}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 text-sm text-slate-400">등록된 내용이 없습니다.</p>
+      )}
+    </article>
+  );
+}
+
+function TagList({ items, color }: { items: string[]; color: "blue" | "green" | "slate" }) {
+  const colorClass = {
+    blue: "bg-blue-50 text-blue-700",
+    green: "bg-emerald-50 text-emerald-700",
+    slate: "bg-slate-100 text-slate-600",
+  }[color];
+
+  if (items.length === 0) return <span className="text-sm text-slate-400">등록된 조건이 없습니다.</span>;
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((item) => (
+        <span className={`rounded-md px-2.5 py-1.5 text-xs font-semibold ${colorClass}`} key={item}>
+          {item}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 export default function CompanyProfile() {
@@ -115,56 +179,131 @@ export default function CompanyProfile() {
     );
   }
 
+  const certifications = parseStructuredRows(profile.licenses);
+  const performances = parseStructuredRows(profile.past_performance);
+
   return (
-    <div className="mt-6 space-y-5">
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-base font-bold text-slate-950">기본 정보</h2>
+    <div className="mt-6 max-w-5xl space-y-5">
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div>
+            <p className="text-xs font-semibold text-blue-600">회사 프로필</p>
+            <h2 className="mt-1 text-xl font-bold text-slate-950">{profile.company_name}</h2>
+            <p className="mt-1 text-sm text-slate-500">{profile.industry || "사업 분야 미등록"}</p>
+          </div>
           <button
-            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            className="cursor-pointer rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
             onClick={() => setIsEditing(true)}
             type="button"
           >
-            수정
+            회사정보 수정
           </button>
         </div>
-        <dl className="mt-5 grid gap-5 md:grid-cols-2">
-          <SummaryItem label="회사명" value={profile.company_name} />
-          <SummaryItem label="사업자등록번호" value={profile.business_registration_number} />
-          <SummaryItem label="대표자명" value={profile.representative_name} />
-          <SummaryItem label="설립일" value={profile.established_date ?? "-"} />
-          <SummaryItem label="전화번호" value={profile.phone} />
-          <SummaryItem label="이메일" value={profile.email} />
-          <SummaryItem full label="회사 소재지" value={profile.address} />
+        <dl className="grid gap-x-6 gap-y-5 p-6 sm:grid-cols-2 lg:grid-cols-4">
+          <InfoItem label="대표자" value={profile.representative_name} />
+          <InfoItem label="회사 구분" value={companyTypeLabels[profile.company_type] ?? "-"} />
+          <InfoItem label="설립일" value={profile.established_date ?? "-"} />
+          <InfoItem label="직원 수" value={profile.employee_count === null ? "-" : `${profile.employee_count}명`} />
+          <InfoItem label="사업자등록번호" value={profile.business_registration_number} />
+          <InfoItem label="전화번호" value={profile.phone} />
+          <InfoItem label="이메일" value={profile.email} />
+          <InfoItem label="회사 소재지" value={profile.address} />
         </dl>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
-        <h2 className="text-base font-bold text-slate-950">사업 정보</h2>
-        <dl className="mt-5 grid gap-5 md:grid-cols-2">
-          <SummaryItem label="주요 업종" value={profile.industry} />
-          <SummaryItem label="회사 구분" value={companyTypeLabels[profile.company_type] ?? "-"} />
-          <SummaryItem label="직원 수" value={profile.employee_count === null ? "-" : `${profile.employee_count}명`} />
-          <SummaryItem label="자본금" value={formatAmount(profile.capital)} />
-          <SummaryItem label="연 매출액" value={formatAmount(profile.annual_revenue)} />
-          <SummaryItem full label="주요 사업 내용" value={profile.main_business} />
-          <SummaryItem full label="보유 기술 및 역량" value={profile.capabilities} />
-          <SummaryItem full label="보유 면허 및 인증" value={profile.licenses} />
-          <SummaryItem full label="과거 수행 실적" value={profile.past_performance} />
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 bg-slate-50/70 px-6 py-4">
+          <h2 className="text-base font-bold text-slate-950">사업 역량</h2>
+          <p className="mt-1 text-sm text-slate-500">회사의 사업 분야와 입찰 수행 역량입니다.</p>
+        </div>
+        <dl className="grid gap-5 border-b border-slate-200 px-6 py-5 sm:grid-cols-3">
+          <div>
+            <dt className="text-xs font-semibold text-slate-500">사업 분야</dt>
+            <dd className="mt-2">
+              <TagList
+                color="blue"
+                items={splitTags([profile.industry, profile.related_industries].filter(Boolean).join(","))}
+              />
+            </dd>
+          </div>
+          <InfoItem label="자본금" value={formatAmount(profile.capital)} />
+          <InfoItem label="연 매출액" value={formatAmount(profile.annual_revenue)} />
+        </dl>
+        <div className="grid divide-y divide-slate-200 md:grid-cols-2 md:divide-x md:divide-y-0">
+          <DescriptionBlock title="주요 사업 내용" value={profile.main_business} />
+          <DescriptionBlock title="보유 기술 및 역량" value={profile.capabilities} />
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 bg-slate-50/70 px-6 py-4">
+          <h2 className="text-base font-bold text-slate-950">참가 자격 및 수행 실적</h2>
+          <p className="mt-1 text-sm text-slate-500">입찰 자격과 사업 경험을 확인할 수 있는 정보입니다.</p>
+        </div>
+        <div className="grid divide-y divide-slate-200 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+          <div className="px-6 py-5">
+            <h3 className="text-sm font-bold text-slate-900">입찰 참가 자격 증빙</h3>
+            <div className="mt-3 divide-y divide-slate-100">
+              {certifications.length > 0 ? certifications.map(([name, issuer, year], index) => (
+                <div className="flex gap-2 py-3 first:pt-0 last:pb-0" key={`${name}-${index}`}>
+                  <span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rounded-full bg-blue-500" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800">{name || "증빙명 미등록"}</p>
+                    <p className="mt-1 text-xs text-slate-500">{[issuer, year].filter(Boolean).join(" · ") || "-"}</p>
+                  </div>
+                </div>
+              )) : <p className="text-sm text-slate-400">등록된 참가 자격 증빙이 없습니다.</p>}
+            </div>
+          </div>
+
+          <div className="px-6 py-5">
+            <h3 className="text-sm font-bold text-slate-900">과거 수행 실적</h3>
+            <div className="mt-3 divide-y divide-slate-100">
+              {performances.length > 0 ? performances.map(([client, year, amount, description], index) => (
+                <div className="flex gap-2 py-3 first:pt-0 last:pb-0" key={`${client}-${index}`}>
+                  <span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rounded-full bg-blue-500" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <p className="text-sm font-semibold text-slate-800">{client || "발주처 미등록"}</p>
+                      <p className="text-xs text-slate-500">{[year, formatStoredAmount(amount)].filter(Boolean).join(" · ")}</p>
+                    </div>
+                    <p className="mt-1 text-sm leading-5 text-slate-600">{description || "사업내용 미등록"}</p>
+                  </div>
+                </div>
+              )) : <p className="text-sm text-slate-400">등록된 수행 실적이 없습니다.</p>}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <CompanyDocuments />
+
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 bg-slate-50/70 px-6 py-4">
+          <h2 className="text-base font-bold text-slate-950">희망 입찰 조건</h2>
+          <p className="mt-1 text-sm text-slate-500">공고 검색과 추천에 사용하는 조건입니다.</p>
+        </div>
+        <div className="grid gap-6 p-6 md:grid-cols-2">
+          <div>
+            <h3 className="mb-3 text-xs font-semibold text-slate-500">희망 키워드</h3>
+            <TagList color="blue" items={splitTags(formatCompanyKeywords(profile))} />
+          </div>
+          <div>
+            <h3 className="mb-3 text-xs font-semibold text-slate-500">희망 지역</h3>
+            <TagList color="green" items={splitTags(profile.preferred_region)} />
+          </div>
+          <div className="md:col-span-2">
+            <h3 className="mb-3 text-xs font-semibold text-slate-500">제외 키워드</h3>
+            <TagList color="slate" items={splitTags(profile.excluded_keywords)} />
+          </div>
+        </div>
+        <dl className="grid gap-5 border-t border-slate-200 bg-slate-50/40 px-6 py-5 sm:grid-cols-3">
+          <InfoItem label="공고 유형" value={bidTypeLabels[profile.preferred_bid_type] ?? "전체"} />
+          <InfoItem label="최소 공고 금액" value={formatAmount(profile.min_bid_amount)} />
+          <InfoItem label="최대 공고 금액" value={formatAmount(profile.max_bid_amount)} />
         </dl>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
-        <h2 className="text-base font-bold text-slate-950">희망 입찰 조건</h2>
-        <dl className="mt-5 grid gap-5 md:grid-cols-2">
-          <SummaryItem full label="찾는 공고 키워드" value={formatCompanyKeywords(profile)} />
-          <SummaryItem full label="제외 키워드" value={profile.excluded_keywords} />
-          <SummaryItem label="공고 유형" value={bidTypeLabels[profile.preferred_bid_type] ?? "전체"} />
-          <SummaryItem label="희망 지역" value={profile.preferred_region} />
-          <SummaryItem label="최소 공고 금액" value={formatAmount(profile.min_bid_amount)} />
-          <SummaryItem label="최대 공고 금액" value={formatAmount(profile.max_bid_amount)} />
-        </dl>
-      </section>
     </div>
   );
 }

@@ -133,10 +133,23 @@ def collect_analysis_documents(bid_ntce_no):
 def company_context(profile):
     """Django 회사 프로필을 AI가 읽기 쉬운 JSON 문자열로 바꿉니다."""
 
+    industries = list(
+        dict.fromkeys(
+            item.strip()
+            for value in (profile.industry, profile.related_industries)
+            for item in value.split(",")
+            if item.strip()
+        )
+    )
     data = {
         "회사명": profile.company_name,
+        "사업자등록번호": profile.business_registration_number,
+        "대표자명": profile.representative_name,
+        "전화번호": profile.phone,
+        "이메일": profile.email,
+        "설립일": profile.established_date.isoformat() if profile.established_date else "미입력",
         "주소": profile.address,
-        "업종": profile.industry,
+        "사업분야": industries,
         "기업유형": profile.get_company_type_display() if profile.company_type else "미입력",
         "직원수": profile.employee_count,
         "자본금": profile.capital,

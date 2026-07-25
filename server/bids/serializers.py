@@ -1,7 +1,9 @@
 from django.contrib.auth import authenticate, get_user_model
 from rest_framework import serializers
 
-from .models import CompanyProfile
+from pathlib import Path
+
+from .models import CompanyDocument, CompanyProfile
 
 
 User = get_user_model()
@@ -63,6 +65,7 @@ class CompanyProfileSerializer(serializers.ModelSerializer):
             "established_date",
             "address",
             "industry",
+            "related_industries",
             "company_type",
             "employee_count",
             "capital",
@@ -82,3 +85,38 @@ class CompanyProfileSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]  # Django가 자동으로 만드는 값
+
+    def validate_related_industries(self, value):
+        industries = list(
+            dict.fromkeys(item.strip() for item in value.split(",") if item.strip())
+        )
+        if len(industries) > 4:
+            raise serializers.ValidationError("관련 업종은 최대 4개까지 선택할 수 있습니다.")
+        return ", ".join(industries)
+
+
+class CompanyDocumentSerializer(serializers.ModelSerializer):
+    file = serializers.FileField(write_only=True)
+
+    class Meta:
+        model = CompanyDocument
+        fields = [
+            "id",
+            "file",
+            "original_name",
+            "document_type",
+            "target_company",
+            "uploaded_at",
+        ]
+        read_only_fields = ["id", "original_name", "uploaded_at"]
+
+    def validate_file(self, uploaded_file):
+        allowed_extensions = {".doc", ".docx", ".ppt", ".pptx", ".hwp", ".hwpx"}
+        extension = Path(uploaded_file.name).suffix.lower()
+
+        if extension not in allowed_extensions:
+            raise serializers.ValidationError("Word, PowerPoint, HWP, HWPX 파일만 업로드할 수 있습니다.")
+        if uploaded_file.size > 20 * 1024 * 1024:
+            raise serializers.ValidationError("파일 한 개의 크기는 20MB를 초과할 수 없습니다.")
+
+        return uploaded_file

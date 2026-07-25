@@ -1,9 +1,6 @@
 "use client";
 
-export const REGION_OPTIONS = [
-  "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종",
-  "경기", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주",
-];
+import RegionDropdown from "@/components/ui/RegionDropdown";
 
 type RegionSelectorProps = {
   regions: string[];
@@ -28,6 +25,11 @@ export default function RegionSelector({
   description = "여러 지역을 차례대로 추가할 수 있습니다.",
 }: RegionSelectorProps) {
   function addRegion(region: string) {
+    if (region === "__all__") {
+      onChange([]); // 전체 지역을 선택하면 저장할 지역 목록을 비움
+      return;
+    }
+
     if (!region || regions.includes(region)) {
       return;
     }
@@ -41,31 +43,22 @@ export default function RegionSelector({
 
   return (
     <div>
-      <span className="text-sm font-medium text-slate-700">{label}</span>
+      <span className="text-sm font-semibold text-slate-800">{label}</span>
 
-      <select
-        className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500"
-        onChange={(event) => addRegion(event.target.value)}
-        value=""
-      >
-        <option value="">전체 지역</option>
-        {REGION_OPTIONS.map((region) => (
-          <option disabled={regions.includes(region)} key={region} value={region}>
-            {region}
-          </option>
-        ))}
-      </select>
+      <div className="mt-2">
+        <RegionDropdown onSelect={addRegion} regions={regions} variant="field" />
+      </div>
 
-      <div className="mt-3 flex min-h-11 flex-wrap items-center gap-2 rounded-md border border-slate-300 p-2">
+      <div className="mt-3 flex min-h-11 flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 p-2">
         {regions.map((region) => (
           <span
-            className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2.5 py-1.5 text-sm font-semibold text-blue-700"
+            className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1.5 text-sm font-semibold text-emerald-700"
             key={region}
           >
             {region}
             <button
               aria-label={`${region} 지역 삭제`}
-              className="h-5 w-5 text-base leading-none text-blue-500 hover:text-blue-800"
+              className="h-5 w-5 cursor-pointer text-base leading-none text-emerald-500 hover:text-emerald-800"
               onClick={() => removeRegion(region)}
               title="지역 삭제"
               type="button"
@@ -75,7 +68,11 @@ export default function RegionSelector({
           </span>
         ))}
 
-        {regions.length === 0 && <span className="px-1 text-sm text-slate-400">전체 지역</span>}
+        {regions.length === 0 && (
+          <span className="rounded-md bg-emerald-50 px-2.5 py-1.5 text-sm font-semibold text-emerald-700">
+            전체 지역
+          </span>
+        )}
       </div>
 
       {name && <input name={name} readOnly type="hidden" value={regions.join(", ")} />}

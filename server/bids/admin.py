@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import BidAnalysis, BidChatMessage, BidNotice, CompanyProfile, RecommendedBid, SavedBid
+from .models import BidAnalysis, BidChatMessage, BidNotice, BidProposal, CompanyDocument, CompanyProfile, RecommendedBid, SavedBid
 
 
 @admin.register(CompanyProfile)
@@ -22,6 +22,14 @@ class CompanyProfileAdmin(admin.ModelAdmin):
     )
     list_filter = ("company_type", "preferred_bid_type")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(CompanyDocument)
+class CompanyDocumentAdmin(admin.ModelAdmin):
+    list_display = ("original_name", "user", "document_type", "target_company", "uploaded_at")
+    list_filter = ("document_type", "uploaded_at")
+    search_fields = ("original_name", "target_company", "user__username")
+    readonly_fields = ("uploaded_at",)
 
 
 @admin.register(BidNotice)
@@ -94,4 +102,22 @@ class BidChatMessageAdmin(admin.ModelAdmin):
     search_fields = ("saved_bid__user__username", "saved_bid__bid_notice__bid_ntce_no", "content")
     list_filter = ("role", "created_at")
     readonly_fields = ("saved_bid", "role", "content", "sources", "created_at")
+
+
+@admin.register(BidProposal)
+class BidProposalAdmin(admin.ModelAdmin):
+    list_display = ("saved_bid", "source_document", "output_format", "created_at", "updated_at")
+    search_fields = ("saved_bid__user__username", "saved_bid__bid_notice__bid_ntce_no")
+    list_filter = ("output_format", "template_mode", "created_at")
+    readonly_fields = (
+        "saved_bid",
+        "source_document",
+        "output_format",
+        "template_mode",
+        "strategy",
+        "draft",
+        "generated_file",
+        "created_at",
+        "updated_at",
+    )
 

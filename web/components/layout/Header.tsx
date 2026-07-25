@@ -2,9 +2,9 @@
 
 export default function Header() { // 사이트 상단 공통 메뉴 컴포넌트
   return (
-    <header className="border-b border-slate-200 bg-white"> {/* 상단 바 영역 */}
+    <header className="border-b border-slate-200 bg-white/90 shadow-[0_1px_0_rgb(15_23_42/0.02)] backdrop-blur"> {/* 상단 바 영역 */}
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6"> {/* 로고와 메뉴 배치 */}
-        <Link className="text-sm font-bold text-slate-950" href="/mainPage">Bid Link</Link>
+        <Link className="text-sm font-bold text-slate-950" href="/mainPage">AI비드</Link>
         <nav className="flex items-center gap-5 text-sm text-slate-600"> {/* 오른쪽 메뉴 */}
           <Link className="transition-colors hover:text-blue-600" href="/dashBoard">대시보드</Link>
           <Link href="/login">로그인</Link>

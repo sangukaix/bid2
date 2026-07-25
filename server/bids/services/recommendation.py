@@ -1,4 +1,5 @@
 from django.db.models import Q
+from django.utils import timezone
 
 from bids.models import BidNotice, CompanyProfile, RecommendedBid
 
@@ -33,6 +34,17 @@ def get_profile_keywords(profile):
             + parse_conditions(profile.preferred_keywords)
         )
     )
+
+
+def delete_expired_recommendations(user):
+    """마감되었거나 비활성화된 추천공고 기록을 실제 DB에서 삭제합니다."""
+
+    deleted_count, _ = RecommendedBid.objects.filter(user=user).filter(
+        Q(bid_notice__is_active=False)
+        | Q(bid_notice__deadline_status=BidNotice.DeadlineStatus.EXPIRED)
+        | Q(bid_notice__close_at__lt=timezone.now())
+    ).delete()
+    return deleted_count
 
 
 def notice_amount(notice):
@@ -140,6 +152,8 @@ def build_recommendation(
 
 
 def match_user_recommendations(user):
+    delete_expired_recommendations(user)  # 새 추천을 만들기 전에 지난 추천공고 정리
+
     profile = CompanyProfile.objects.filter(user=user).first()
     if profile is None:
         return {"checked": 0, "created": 0, "updated": 0}
@@ -162,7 +176,9 @@ def match_user_recommendations(user):
             | Q(demand_organization__icontains=keyword)
         )
 
-    notices = BidNotice.objects.filter(is_active=True).filter(keyword_condition)
+    notices = BidNotice.objects.filter(is_active=True).filter(
+        Q(close_at__isnull=True) | Q(close_at__gte=timezone.now())
+    ).filter(keyword_condition)
     checked_count = notices.count()
     ranked_matches = []
 

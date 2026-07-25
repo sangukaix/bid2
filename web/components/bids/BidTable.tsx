@@ -49,7 +49,7 @@ function RegionInfo({ bid }: { bid: BidNotice }) {
 
   if (!needsTooltip) {
     return (
-      <p className="mt-1 max-w-20 overflow-hidden break-keep text-xs leading-4 text-slate-500 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+      <p className="mt-1 max-w-20 truncate whitespace-nowrap text-xs leading-4 text-slate-500">
         {region}
       </p>
     );
@@ -62,7 +62,7 @@ function RegionInfo({ bid }: { bid: BidNotice }) {
         className="flex w-full cursor-help items-center gap-1 text-left text-xs text-slate-500 hover:text-blue-600"
         type="button"
       >
-        <span className="overflow-hidden break-keep leading-4 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">{preview}</span>
+        <span className="min-w-0 truncate whitespace-nowrap leading-4">{preview}</span>
         <span aria-hidden="true" className="shrink-0 text-[10px]">▾</span>
       </button>
       <span className="invisible absolute left-0 top-7 z-20 w-64 whitespace-normal break-words rounded-md bg-slate-900 px-3 py-2 text-xs font-normal leading-5 text-white opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
@@ -77,7 +77,7 @@ function pageHref(filters: BidSearchParams, page: number) {
   const params = new URLSearchParams();
 
   for (const [key, value] of Object.entries(filters)) {
-    if (value && key !== "page") {
+    if (value !== undefined && key !== "page") {
       params.set(key, value);
     }
   }
@@ -89,13 +89,15 @@ function pageHref(filters: BidSearchParams, page: number) {
 
 function filterHref(
   filters: BidSearchParams,
-  key: "business_type" | "deadline_sort",
+  key: "deadline_sort",
   value: string,
 ) {
   const params = new URLSearchParams();
 
   for (const [filterKey, filterValue] of Object.entries(filters)) {
-    if (filterValue && filterKey !== "page") params.set(filterKey, filterValue);
+    if (filterValue !== undefined && filterKey !== "page") {
+      params.set(filterKey, filterValue);
+    }
   }
 
   if (value) params.set(key, value);
@@ -104,9 +106,20 @@ function filterHref(
   return `/dashBoard/bidList${params.size ? `?${params}` : ""}`;
 }
 
+function getVisiblePages(currentPage: number, totalPages: number) {
+  const visibleCount = Math.min(5, totalPages);
+  const startPage = Math.max(
+    1,
+    Math.min(currentPage - 2, totalPages - visibleCount + 1),
+  );
+
+  return Array.from({ length: visibleCount }, (_, index) => startPage + index);
+}
+
 export default function BidTable({ data, error, filters }: BidTableProps) { // 입찰 데이터를 서버에서 가져오는 서버 컴포넌트
   const router = useRouter();
   const bids = data?.items ?? [];
+  const visiblePages = data ? getVisiblePages(data.page, data.total_pages) : [];
 
   return (
     <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
@@ -127,21 +140,7 @@ export default function BidTable({ data, error, filters }: BidTableProps) { // �
           <thead className="bg-slate-50 text-slate-600">
             <tr>
               <th className="w-24 whitespace-nowrap px-3 py-3 font-semibold" scope="col">
-                <label className={`relative inline-flex cursor-pointer items-center gap-1 ${filters.business_type ? "text-blue-600" : ""}`}>
-                  <span>구분</span>
-                  <span aria-hidden="true" className="text-xs">▾</span>
-                  <select
-                    aria-label="업무 구분 필터"
-                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                    onChange={(event) => router.push(filterHref(filters, "business_type", event.target.value))}
-                    value={filters.business_type ?? ""}
-                  >
-                    <option value="">전체</option>
-                    <option value="물품">물품</option>
-                    <option value="용역">용역</option>
-                    <option value="공사">공사</option>
-                  </select>
-                </label>
+                구분
               </th>
 
               <th className="min-w-[440px] px-4 py-3 text-center font-semibold" scope="col">
@@ -277,35 +276,99 @@ export default function BidTable({ data, error, filters }: BidTableProps) { // �
       {data && data.total_pages > 1 && (
         <nav
           aria-label="입찰공고 페이지"
-          className="flex items-center justify-between border-t border-slate-200 px-5 py-4"
+          className="flex flex-wrap items-center justify-center gap-1.5 border-t border-slate-200 px-5 py-4"
         >
           {data.page > 1 ? (
             <Link
-              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              href={pageHref(filters, data.page - 1)}
+              aria-label="첫 페이지"
+              className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-lg text-slate-500 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
+              href={pageHref(filters, 1)}
+              prefetch={false}
+              title="첫 페이지"
             >
-              이전
+              «
             </Link>
           ) : (
-            <span className="rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-300">
-              이전
+            <span aria-hidden="true" className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-100 text-lg text-slate-300">
+              «
             </span>
           )}
 
-          <p className="text-sm text-slate-600">
-            <strong className="text-slate-950">{data.page}</strong> / {data.total_pages.toLocaleString("ko-KR")}
-          </p>
+          {data.page > 1 ? (
+            <Link
+              aria-label="이전 페이지"
+              className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-lg text-slate-500 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
+              href={pageHref(filters, data.page - 1)}
+              prefetch={false}
+              title="이전 페이지"
+            >
+              ‹
+            </Link>
+          ) : (
+            <span aria-hidden="true" className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-100 text-lg text-slate-300">
+              ‹
+            </span>
+          )}
+
+          {visiblePages[0] > 1 && (
+            <span className="flex h-9 w-6 items-center justify-center text-sm text-slate-400">…</span>
+          )}
+
+          {visiblePages.map((pageNumber) => (
+            pageNumber === data.page ? (
+              <span
+                aria-current="page"
+                className="flex h-9 min-w-9 items-center justify-center rounded-md bg-blue-600 px-2 text-sm font-semibold text-white"
+                key={pageNumber}
+              >
+                {pageNumber}
+              </span>
+            ) : (
+              <Link
+                aria-label={`${pageNumber}페이지`}
+                className="flex h-9 min-w-9 items-center justify-center rounded-md border border-slate-200 px-2 text-sm font-medium text-slate-600 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
+                href={pageHref(filters, pageNumber)}
+                key={pageNumber}
+                prefetch={false}
+              >
+                {pageNumber}
+              </Link>
+            )
+          ))}
+
+          {visiblePages[visiblePages.length - 1] < data.total_pages && (
+            <span className="flex h-9 w-6 items-center justify-center text-sm text-slate-400">…</span>
+          )}
 
           {data.page < data.total_pages ? (
             <Link
-              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              aria-label="다음 페이지"
+              className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-lg text-slate-500 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
               href={pageHref(filters, data.page + 1)}
+              prefetch={false}
+              title="다음 페이지"
             >
-              다음
+              ›
             </Link>
           ) : (
-            <span className="rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-300">
-              다음
+            <span aria-hidden="true" className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-100 text-lg text-slate-300">
+              ›
+            </span>
+          )}
+
+          {data.page < data.total_pages ? (
+            <Link
+              aria-label="마지막 페이지"
+              className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-lg text-slate-500 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
+              href={pageHref(filters, data.total_pages)}
+              prefetch={false}
+              title="마지막 페이지"
+            >
+              »
+            </Link>
+          ) : (
+            <span aria-hidden="true" className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-100 text-lg text-slate-300">
+              »
             </span>
           )}
         </nav>

@@ -6,6 +6,7 @@ import zipfile
 from zoneinfo import ZoneInfo
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.test import override_settings
@@ -16,7 +17,7 @@ from bids.management.commands.sync_bids import (
     determine_deadline_status,
     update_latest_notices,
 )
-from bids.models import BidAnalysis, BidChatMessage, BidNotice, CompanyProfile, RecommendedBid, SavedBid
+from bids.models import BidAnalysis, BidChatMessage, BidNotice, BidProposal, CompanyDocument, CompanyProfile, RecommendedBid, SavedBid
 from bids.services.g2b_api import fetch_bid_notices
 from bids.services.rag.extract_document import extract_document
 from bids.services.rag.retriever import search_bid_documents
@@ -134,6 +135,7 @@ class CompanyProfileViewTests(TestCase):
             "representative_name": "김대표",
             "address": "서울특별시",
             "industry": "소프트웨어 개발",
+            "related_industries": "정보통신, 연구·컨설팅",
             "main_business": "웹 서비스 개발",
             "preferred_keywords": "홈페이지 구축",
         }
@@ -163,6 +165,10 @@ class CompanyProfileViewTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(CompanyProfile.objects.get().user, self.user)
         self.assertEqual(response.json()["profile"]["company_name"], "테스트회사")
+        self.assertEqual(
+            response.json()["profile"]["related_industries"],
+            "정보통신, 연구·컨설팅",
+        )
 
     def test_기존_회사_프로필의_일부를_수정한다(self):
         self.client.force_login(self.user)
@@ -177,6 +183,167 @@ class CompanyProfileViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["profile"]["company_name"], "수정된 회사")
         self.assertEqual(CompanyProfile.objects.get().industry, "소프트웨어 개발")
+
+    def test_관련_업종은_최대_4개까지_저장한다(self):
+        self.client.force_login(self.user)
+        self.profile_data["related_industries"] = "교육, IT, 제조, 건설, 의료"
+
+        response = self.client.post(
+            "/api/company-profile/",
+            self.profile_data,
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("related_industries", response.json())
+
+
+class BusinessRegistrationViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="registration-user",
+            password="test-password",
+        )
+
+    def test_로그인하지_않으면_사업자등록증을_분석할_수_없다(self):
+        response = self.client.post(
+            "/api/company-profile/business-registration/",
+            {"file": SimpleUploadedFile("registration.png", b"image", content_type="image/png")},
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    @patch("bids.views.extract_business_registration")
+    def test_사업자등록증에서_확인된_기본정보만_반환한다(self, extract_mock):
+        self.client.force_login(self.user)
+        extract_mock.return_value = {
+            "company_name": "테스트회사",
+            "business_registration_number": "123-45-67890",
+            "representative_name": "김대표",
+            "address": "서울특별시 강남구",
+        }
+
+        response = self.client.post(
+            "/api/company-profile/business-registration/",
+            {"file": SimpleUploadedFile("registration.png", b"image", content_type="image/png")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["company_name"], "테스트회사")
+        self.assertEqual(response.json()["address"], "서울특별시 강남구")
+        extract_mock.assert_called_once()
+
+    def test_파일이_없으면_사업자등록증을_분석하지_않는다(self):
+        self.client.force_login(self.user)
+
+        response = self.client.post("/api/company-profile/business-registration/")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+
+
+class CompanyDocumentViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="document-user",
+            password="test-password",
+        )
+        self.media_directory = tempfile.TemporaryDirectory()
+        self.settings_override = override_settings(MEDIA_ROOT=self.media_directory.name)
+        self.settings_override.enable()
+        self.addCleanup(self.settings_override.disable)
+        self.addCleanup(self.media_directory.cleanup)
+
+    def test_로그인한_사용자가_제안서를_업로드하고_조회한다(self):
+        self.client.force_login(self.user)
+        uploaded_file = SimpleUploadedFile(
+            "sample-proposal.docx",
+            b"sample proposal",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+        response = self.client.post(
+            "/api/company-documents/",
+            {
+                "file": uploaded_file,
+                "document_type": "proposal",
+                "target_company": "한국가스공사",
+            },
+        )
+        list_response = self.client.get("/api/company-documents/")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json()["count"], 1)
+        self.assertEqual(list_response.json()["items"][0]["original_name"], "sample-proposal.docx")
+        self.assertEqual(list_response.json()["items"][0]["target_company"], "한국가스공사")
+
+    def test_PDF_회사_문서는_업로드할_수_없다(self):
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            "/api/company-documents/",
+            {
+                "file": SimpleUploadedFile(
+                    "sample.pdf",
+                    b"pdf",
+                    content_type="application/pdf",
+                ),
+                "document_type": "proposal",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("file", response.json())
+
+    def test_회사_문서는_최대_10개까지만_저장한다(self):
+        self.client.force_login(self.user)
+        for index in range(10):
+            CompanyDocument.objects.create(
+                user=self.user,
+                file=f"company_documents/test-{index}.pdf",
+                original_name=f"test-{index}.pdf",
+                document_type=CompanyDocument.DocumentType.PROPOSAL,
+            )
+
+        response = self.client.post(
+            "/api/company-documents/",
+            {
+                "file": SimpleUploadedFile("extra.pdf", b"extra"),
+                "document_type": "proposal",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"], "회사 문서는 최대 10개까지 업로드할 수 있습니다.")
+
+    def test_허용하지_않는_파일은_업로드할_수_없다(self):
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            "/api/company-documents/",
+            {
+                "file": SimpleUploadedFile("program.exe", b"unsafe"),
+                "document_type": "proposal",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("file", response.json())
+
+    def test_본인이_업로드한_문서를_삭제한다(self):
+        self.client.force_login(self.user)
+        document = CompanyDocument.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("delete.pdf", b"delete"),
+            original_name="delete.pdf",
+            document_type=CompanyDocument.DocumentType.PROPOSAL,
+        )
+
+        response = self.client.delete(f"/api/company-documents/{document.id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(CompanyDocument.objects.filter(id=document.id).exists())
 
 
 class RecommendedBidViewTests(TestCase):
@@ -935,6 +1102,32 @@ class RecommendationTests(TestCase):
         self.assertEqual(response.json()["count"], 1)
         self.assertEqual(response.json()["items"][0]["bidNtceNo"], "REC-001")
 
+    def test_마감일이_지난_추천공고는_API_조회시_DB에서_삭제한다(self):
+        self.notice.close_at = timezone.now() - timedelta(minutes=1)
+        self.notice.save(update_fields=["close_at"])
+        RecommendedBid.objects.create(
+            user=self.user,
+            bid_notice=self.notice,
+            match_score=60,
+            is_match=True,
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get("/api/recommendations/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 0)
+        self.assertFalse(RecommendedBid.objects.filter(user=self.user).exists())
+
+    def test_마감일이_지난_공고는_추천_매칭에서_다시_만들지_않는다(self):
+        self.notice.close_at = timezone.now() - timedelta(minutes=1)
+        self.notice.save(update_fields=["close_at"])
+
+        result = match_user_recommendations(self.user)
+
+        self.assertEqual(result["created"], 0)
+        self.assertFalse(RecommendedBid.objects.filter(user=self.user).exists())
+
     def test_회사조건이_바뀌면_예전_추천을_목록에서_숨긴다(self):
         match_user_recommendations(self.user)
         profile = self.user.company_profile
@@ -1155,3 +1348,204 @@ class BidAnalysisTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(content.startswith(b"%PDF"))
+
+
+class BidProposalTests(TestCase):
+    def setUp(self):
+        self.media_directory = tempfile.TemporaryDirectory()
+        self.media_override = override_settings(MEDIA_ROOT=self.media_directory.name)
+        self.media_override.enable()
+        self.addCleanup(self.media_override.disable)
+        self.addCleanup(self.media_directory.cleanup)
+
+        self.user = get_user_model().objects.create_user(
+            username="proposal-user",
+            password="1234",
+        )
+        CompanyProfile.objects.create(
+            user=self.user,
+            company_name="제안서 테스트 회사",
+            business_registration_number="333-44-55555",
+            representative_name="박대표",
+            address="서울특별시",
+            industry="소프트웨어",
+            main_business="정보시스템 구축",
+            preferred_keywords="정보시스템",
+        )
+        self.notice = BidNotice.objects.create(
+            bid_ntce_no="PROPOSAL-001",
+            title="정보시스템 구축 제안요청",
+            business_type="용역",
+            is_active=True,
+            raw_data={
+                "bidNtceNo": "PROPOSAL-001",
+                "bidNtceOrd": "000",
+                "bidNtceNm": "정보시스템 구축 제안요청",
+                "bsnsDivNm": "용역",
+            },
+        )
+        self.saved_bid = SavedBid.objects.create(
+            user=self.user,
+            bid_notice=self.notice,
+        )
+
+    def create_source_proposal(self):
+        return CompanyDocument.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile(
+                "previous-proposal.docx",
+                b"previous proposal",
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ),
+            original_name="previous-proposal.docx",
+            document_type=CompanyDocument.DocumentType.PROPOSAL,
+            target_company="한국가스공사",
+        )
+
+    def test_제안서에_공고기본정보를_전달한다(self):
+        from bids.services.rag.proposal import build_bid_notice_context
+
+        context = build_bid_notice_context(self.notice)
+
+        self.assertIn("정보시스템 구축 제안요청", context)
+        self.assertIn("PROPOSAL-001", context)
+        self.assertIn("용역", context)
+
+    @patch("bids.services.rag.proposal.extract_document")
+    def test_제안서에_회사소개서_내용을_전달한다(self, mock_extract):
+        from langchain_core.documents import Document
+
+        from bids.services.rag.extract_document import ExtractionResult
+        from bids.services.rag.proposal import build_company_introduction_context
+
+        CompanyDocument.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile(
+                "company-introduction.pdf",
+                b"company introduction",
+                content_type="application/pdf",
+            ),
+            original_name="company-introduction.pdf",
+            document_type=CompanyDocument.DocumentType.COMPANY_INTRODUCTION,
+        )
+        mock_extract.return_value = ExtractionResult(
+            documents=[
+                Document(
+                    page_content="공공 정보시스템 구축과 운영 경험을 보유하고 있습니다.",
+                    metadata={"location": "1페이지"},
+                )
+            ],
+            processed_files=["company-introduction.pdf"],
+        )
+
+        context, processed_files, failed_files = (
+            build_company_introduction_context(self.user)
+        )
+
+        self.assertIn("공공 정보시스템 구축과 운영 경험", context)
+        self.assertEqual(processed_files, ["company-introduction.pdf"])
+        self.assertEqual(failed_files, [])
+
+    def test_제안서에_사업자등록_기본정보를_전달한다(self):
+        from bids.services.rag.analysis import company_context
+
+        profile = CompanyProfile.objects.get(user=self.user)
+        context = company_context(profile)
+
+        self.assertIn("333-44-55555", context)
+        self.assertIn("박대표", context)
+
+    def test_기존_제안서가_없으면_생성할_수_없다(self):
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            "/api/bids/PROPOSAL-001/proposal/",
+            {"source_document_id": 1, "output_format": "docx"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("기존 제안서", response.json()["error"])
+
+    def test_HWP_제안서는_Word_형식으로만_생성한다(self):
+        source_proposal = CompanyDocument.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("previous-proposal.hwp", b"hwp"),
+            original_name="previous-proposal.hwp",
+            document_type=CompanyDocument.DocumentType.PROPOSAL,
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            "/api/bids/PROPOSAL-001/proposal/",
+            {
+                "source_document_id": source_proposal.id,
+                "output_format": "pptx",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Word", response.json()["error"])
+
+    @patch("bids.services.rag.proposal.generate_bid_proposal")
+    def test_제안서는_한번_생성한_결과를_재사용한다(self, mock_generate):
+        source_proposal = self.create_source_proposal()
+        mock_generate.return_value = {
+            "strategy": {"win_themes": ["안정적인 구축"]},
+            "draft": {
+                "proposal_title": "맞춤형 제안서",
+                "subtitle": "정보시스템 구축",
+                "executive_summary": "사업 요구사항에 맞춘 제안입니다.",
+                "sections": [],
+                "final_checklist": [],
+            },
+            "template_mode": "original_theme",
+            "filename": "proposal-PROPOSAL-001.docx",
+            "file_bytes": b"generated proposal",
+            "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+        self.client.force_login(self.user)
+        request_data = {
+            "source_document_id": source_proposal.id,
+            "output_format": "docx",
+        }
+
+        first = self.client.post(
+            "/api/bids/PROPOSAL-001/proposal/",
+            request_data,
+            content_type="application/json",
+        )
+        second = self.client.post(
+            "/api/bids/PROPOSAL-001/proposal/",
+            request_data,
+            content_type="application/json",
+        )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(mock_generate.call_count, 1)
+        self.assertEqual(BidProposal.objects.count(), 1)
+
+    def test_저장된_제안서_파일을_내려받는다(self):
+        source_proposal = self.create_source_proposal()
+        proposal = BidProposal.objects.create(
+            saved_bid=self.saved_bid,
+            source_document=source_proposal,
+            output_format=BidProposal.OutputFormat.DOCX,
+            strategy={},
+            draft={},
+        )
+        proposal.generated_file.save(
+            "proposal-PROPOSAL-001.docx",
+            SimpleUploadedFile("proposal.docx", b"generated proposal"),
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            "/api/bids/PROPOSAL-001/proposal/download/"
+        )
+        content = b"".join(response.streaming_content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(content, b"generated proposal")

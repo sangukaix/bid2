@@ -8,6 +8,7 @@ export type CompanyProfileData = {
   established_date: string | null;
   address: string;
   industry: string;
+  related_industries: string;
   company_type: string;
   employee_count: number | null;
   capital: number | null;
@@ -25,4 +26,12 @@ export type CompanyProfileData = {
   max_bid_amount: number | null;
   created_at: string;
   updated_at: string;
+};
+
+export type CompanyDocumentData = {
+  id: number;
+  original_name: string;
+  document_type: "proposal" | "company_introduction";
+  target_company: string;
+  uploaded_at: string;
 };
