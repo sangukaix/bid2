@@ -1,5 +1,8 @@
 # BID2 과제 요구사항 점검표
 
+> **문서 기준 안내:** 이 문서는 2026-07-19 코드 기준으로 작성되었다.
+> 제안서 기능의 현재 상태는 `MAPPING.md`와 `TODO.md`를 우선 확인한다.
+
 > 검토 기준: `생성형 AI 활용 챗봇 or 서비스 웹앱 개발 수행과제.pdf` 5쪽 전체  
 > 검토일: 2026-07-19  
 > 목적: 과제 요구사항과 현재 BID2 구현을 대조하고, 제출 전 보완할 항목을 정리한다.
@@ -191,7 +194,7 @@ Function Calling을 추가한다면 Tool 실행 화면은 LLM이 Tool을 호출�
   - Retriever
   - Output Parser
   - OpenAI와 RAG 설정
-- `docs/BID2_프로젝트_폴더_구조.md`
+- `docs/MAPPING.md`
   - 실제 프로젝트 트리
   - 폴더 및 주요 파일 역할
   - 프론트엔드, 백엔드, DB, RAG 데이터 흐름
@@ -258,7 +261,7 @@ Function Calling을 추가한다면 Tool 실행 화면은 LLM이 Tool을 호출�
 | 내용 | 위치 |
 |---|---|
 | 과제 설계 문서 | `docs/BID2_과제_설계_문서.md` |
-| 프로젝트 구조 문서 | `docs/BID2_프로젝트_폴더_구조.md` |
+| 프로젝트 구조 문서 | `docs/MAPPING.md` |
 | 챗봇 Prompt와 Chain | `server/bids/services/rag/chatbot.py` |
 | AI 분석 Prompt와 구조화 출력 | `server/bids/services/rag/analysis.py` |
 | Retriever 설정 | `server/bids/services/rag/retriever.py` |
