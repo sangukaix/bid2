@@ -47,10 +47,6 @@ def delete_expired_recommendations(user):
     return deleted_count
 
 
-def notice_amount(notice):
-    return notice.budget_amount or notice.estimated_price
-
-
 def matches_region(notice, preferred_regions):
     if not preferred_regions or not notice.region_limit:
         return True
@@ -98,16 +94,6 @@ def build_recommendation(
     if not matches_region(notice, preferred_regions):
         return None
 
-    amount = notice_amount(notice)
-    if profile.min_bid_amount is not None and (
-        amount is None or amount < profile.min_bid_amount
-    ):
-        return None
-    if profile.max_bid_amount is not None and (
-        amount is None or amount > profile.max_bid_amount
-    ):
-        return None
-
     score = 0
     reasons = []
     title_matches = [keyword for keyword in matched_keywords if keyword.lower() in title]
@@ -136,10 +122,6 @@ def build_recommendation(
         score += 10
         region_reason = "전국 참가 가능" if not notice.region_limit else "희망 지역 일치"
         reasons.append(f"{region_reason} (+10점)")
-    if profile.min_bid_amount is not None or profile.max_bid_amount is not None:
-        score += 5
-        reasons.append("희망 금액 범위 포함 (+5점)")
-
     if score < MIN_RECOMMENDATION_SCORE:
         return None
 

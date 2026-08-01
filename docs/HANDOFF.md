@@ -1,88 +1,58 @@
-# BID2 작업 인수인계
+# Bid2 작업 인계
 
-작성일: 2026-07-25  
-다음 작업 장소: 집 컴퓨터  
-작성 시점 커밋: `3ea9c1e`
+## 현재 방향
 
-> 현재 제안서 RAG와 최대 15·30·50쪽 생성 기능은 구현 중이다.
-> 기능 연결 구조는 `MAPPING.md`, 남은 작업은 `TODO.md`를 기준으로 확인한다.
+- 프론트엔드: Next.js + React
+- 백엔드: Django REST Framework
+- 개발 DB: SQLite, 운영 전 MySQL 전환 예정
+- 공고 수집: 나라장터 Open API
+- AI: OpenAI + LangChain + Chroma
 
-## 현재 작업
-
-사용자가 업로드한 기존 제안서를 전체 추출해 회사 문서 전용 Chroma DB에 저장하고,
-새 공고 문서와 함께 RAG 검색하여 맞춤형 제안서를 만드는 구조로 변경하고 있다.
+## 완료된 핵심 흐름
 
 ```text
-공고 첨부문서 RAG
-        +
-회사 제안서 RAG
-        +
-저장된 회사정보
-        |
-        v
-수주 전략 설계
-        |
-        v
-목차별 관련 Chunk 재검색
-        |
-        v
-목차별 페이지 초안 생성
-        |
-        v
-DOCX 또는 PPTX로 합치기
+회원가입/로그인
+  -> 회사 정보와 회사 문서 등록
+  -> 나라장터 공고 수집/검색/저장
+  -> 공고 첨부문서 Lazy indexing
+  -> 공고별 AI 채팅과 분석
+  -> Bid2 템플릿 기반 제안서 생성/미리보기/수정/다운로드
 ```
 
-## 완료된 부분
+회사 문서는 제안서를 처음 만들 때 자동 분석합니다. 추출 결과는
+`CompanyKnowledgeItem`에 출처와 함께 저장하며 다음 생성부터 재사용합니다.
+사용자 승인 단계는 두지 않습니다.
 
-- 회사 제안서 전용 Lazy indexing 모듈 추가
-- 사용자·회사문서별 Chroma 저장 경로 분리
-- 기존 인덱스 재사용 구조 추가
-- 간단형 15쪽, 표준형 30쪽, 상세형 50쪽 설정 추가
-- 목차 중요도에 따른 본문 페이지 배분 함수 추가
-- 목차별 공고·회사 제안서 RAG 검색과 생성 구조 추가
-- DOCX/PPTX 생성기에 본문 페이지 예산 반영
+## 2026-07-30 제안서 작업 화면
 
-## 아직 완료되지 않은 부분
+- 기본 제안서는 약 30장을 목표로 생성하며 최종 결과는 최대 50장입니다.
+- AI비서 한 화면에서 공고 질문과 제안서 수정 요청을 함께 입력합니다.
+- 공고 질문은 공고 RAG만 사용하고, 명시적인 웹 검색 수정 요청만 웹 자료를 참고합니다.
+- 대화는 `BidChatMessage`에 저장되어 재로그인 후에도 유지됩니다.
+- 메시지 삭제는 실제 행을 지우지 않고 `삭제된 메시지입니다.`로 남깁니다.
+- `제안서 만들기`를 누른 공고는 사이드바에 프로젝트 1, 2 순서로 저장됩니다.
 
-- Word 생성 시 빈 페이지가 생기지 않도록 페이지 구분 정리
-- Django API에 `length_mode` 검증과 전달 연결
-- Next.js에 간단형·표준형·상세형 선택 UI 추가
-- TypeScript 응답 자료형 갱신
-- 회사 제안서 RAG와 페이지 배분 자동 테스트 추가
-- Django check, 전체 테스트, Next.js build
-- 실제 제안서 생성 품질과 비용 확인
-
-자세한 순서는 `TODO.md`를 따른다.
-
-## 집에서 시작
+## 로컬 실행
 
 ```powershell
-cd <집 컴퓨터의 bid2 경로>
-git pull
-git log -3 --oneline --decorate
-git status
+# Django
+cd server
+.\venv\Scripts\Activate.ps1
+python manage.py runserver
+
+# Next.js (새 터미널)
+cd web
+npm run dev
 ```
 
-Codex 요청 문장:
+`.env`, `db.sqlite3`, `venv`, `node_modules`, `chroma_db`는 Git으로 공유하지
+않습니다. 새 컴퓨터에서는 `.env.example`을 참고하고 의존성과 DB를 다시
+준비해야 합니다.
 
-> `docs/HANDOFF.md`, `docs/MAPPING.md`, `docs/TODO.md`를 읽고 실제 코드와 비교해줘.
-> TODO의 최우선 작업부터 이어서 진행해줘. 실제 OpenAI 호출은 비용이 발생하므로
-> Mock 테스트, Django check, Next.js build를 먼저 실행해줘.
+## 다음 작업
 
-## 로컬 환경 주의
-
-- `.env`, `db.sqlite3`, `venv`, `node_modules`, `media`, `chroma_db`는 컴퓨터마다 다를 수 있다.
-- 집 컴퓨터의 `server/.env`에 `OPENAI_API_KEY`, `G2B_API_KEY`가 필요하다.
-- Git pull만으로 학원 컴퓨터의 계정, DB, 업로드 문서와 Chroma DB가 복사되지는 않는다.
-- 큰 문서 실험 전에 작은 DOCX 제안서로 흐름을 먼저 확인한다.
-- `.env` 값과 실제 API Key는 문서나 Git에 기록하지 않는다.
-
-## 작업 종료 시 갱신할 내용
-
-- 완료한 TODO
-- 변경한 주요 파일
-- Django check와 테스트 결과
-- Next.js build 결과
-- 실제 OpenAI 호출 여부와 비용
-- 남은 문제
-- 마지막 커밋과 push 여부
+1. 실제 공고 1건으로 30장 실무형 템플릿 생성 품질 검증
+2. 요구사항·평가항목·회사 증빙 반영 여부와 미해결 문구 확인
+3. 서로 다른 업종 공고 2건으로 업종별 목차와 전략 품질 비교
+4. 생성 작업을 백그라운드 작업으로 분리해 운영 서버 시간 초과 방지
+5. 배포 전 SQLite/로컬 Chroma를 운영 DB와 벡터 저장소로 전환

@@ -61,8 +61,6 @@ class CompanyProfile(models.Model):
         blank=True,
     )
     preferred_region = models.CharField(max_length=200, blank=True)
-    min_bid_amount = models.PositiveBigIntegerField(null=True, blank=True)
-    max_bid_amount = models.PositiveBigIntegerField(null=True, blank=True)
 
     # 최초 저장 시간과 마지막 수정 시간
     created_at = models.DateTimeField(auto_now_add=True)
@@ -92,7 +90,6 @@ class CompanyDocument(models.Model):
     file = models.FileField(upload_to=company_document_upload_path)
     original_name = models.CharField(max_length=255)
     document_type = models.CharField(max_length=30, choices=DocumentType.choices)
-    target_company = models.CharField(max_length=200, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -105,6 +102,55 @@ class CompanyDocument(models.Model):
 
     def __str__(self):
         return self.original_name
+
+
+class CompanyKnowledgeItem(models.Model):
+    class Category(models.TextChoices):
+        COMPANY_OVERVIEW = "company_overview", "회사 개요"
+        HISTORY = "history", "연혁"
+        PERSONNEL = "personnel", "인력"
+        INFRASTRUCTURE = "infrastructure", "인프라"
+        CAPABILITY = "capability", "기술·역량"
+        PERFORMANCE = "performance", "수행 실적"
+        METHODOLOGY = "methodology", "수행 방법론"
+        STRENGTH = "strength", "강점·차별점"
+        CERTIFICATION = "certification", "면허·인증"
+        OTHER = "other", "기타"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="company_knowledge_items",
+    )
+    source_document = models.ForeignKey(
+        CompanyDocument,
+        on_delete=models.CASCADE,
+        related_name="knowledge_items",
+    )  # 원본 문서 삭제 시 해당 문서에서 추출한 지식도 함께 삭제
+    category = models.CharField(max_length=30, choices=Category.choices)
+    title = models.CharField(max_length=200)
+    content = models.TextField()
+    source_locations = models.JSONField(default=list, blank=True)
+    evidence_excerpt = models.TextField(blank=True)
+    tags = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("category", "title")
+        indexes = [
+            models.Index(
+                fields=("user", "category"),
+                name="company_know_user_category",
+            ),
+            models.Index(
+                fields=("source_document", "category"),
+                name="company_know_doc_category",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.get_category_display()} - {self.title}"
 
 
 class BidNotice(models.Model):
@@ -180,6 +226,10 @@ class SavedBid(models.Model):
         on_delete=models.CASCADE,
         related_name="saved_by_users",
     )  # 어떤 입찰공고를 저장했는지 연결
+    proposal_started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )  # 사용자가 제안서 만들기를 눌러 프로젝트를 시작한 시간
     created_at = models.DateTimeField(auto_now_add=True)  # 공고를 저장한 시간
 
     class Meta:
@@ -250,14 +300,35 @@ class BidChatMessage(models.Model):
         USER = "user", "사용자"
         ASSISTANT = "assistant", "AI"
 
+    class MessageType(models.TextChoices):
+        QUESTION = "question", "공고 질문"
+        PROPOSAL = "proposal", "제안서 수정"
+
+    class Status(models.TextChoices):
+        APPLIED = "applied", "처리 완료"
+        PENDING = "pending", "반영 대기"
+        FAILED = "failed", "처리 실패"
+
     saved_bid = models.ForeignKey(
         SavedBid,
         on_delete=models.CASCADE,
         related_name="chat_messages",
     )  # 회원이 저장한 공고와 대화 내용을 연결
     role = models.CharField(max_length=10, choices=Role.choices)
+    message_type = models.CharField(
+        max_length=20,
+        choices=MessageType.choices,
+        default=MessageType.QUESTION,
+    )  # 하나의 대화창 안에서 공고 질문과 제안서 수정 요청을 구분
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.APPLIED,
+    )
     content = models.TextField()
     sources = models.JSONField(default=list, blank=True)
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -284,16 +355,10 @@ class BidProposal(models.Model):
         on_delete=models.CASCADE,
         related_name="proposal",
     )  # 회원이 저장한 공고 하나와 생성 제안서 하나를 연결
-    source_document = models.ForeignKey(
-        CompanyDocument,
-        on_delete=models.SET_NULL,
-        null=True,
-        related_name="generated_proposals",
-    )  # 문체와 디자인을 참고한 기존 회사 제안서
     output_format = models.CharField(max_length=10, choices=OutputFormat.choices)
-    template_mode = models.CharField(max_length=30, default="new_document")
+    template_mode = models.CharField(max_length=30, default="default_template")
     strategy = models.JSONField(default=dict)
-    draft = models.JSONField(default=dict)
+    revision_plan = models.JSONField(default=dict)
     generated_file = models.FileField(upload_to=bid_proposal_upload_path)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -309,5 +374,8 @@ class BidProposal(models.Model):
 def delete_bid_proposal_file(sender, instance, **kwargs):
     """저장 공고가 삭제되면 생성된 제안서 파일도 함께 정리합니다."""
 
+    from .services.proposal_preview import delete_proposal_preview
+
+    delete_proposal_preview(instance)
     if instance.generated_file:
         instance.generated_file.delete(save=False)

@@ -1,7 +1,12 @@
 from langchain_chroma import Chroma  # 저장된 벡터 DB 불러오기
 from langchain_openai import OpenAIEmbeddings  # 질문을 벡터로 변환
 
-from .vector_store import EMBEDDING_MODEL, get_bid_db_path, get_collection_name
+from .vector_store import (
+    EMBEDDING_MODEL,
+    get_bid_db_path,
+    get_collection_name,
+    normalize_l2_relevance_score,
+)
 
 
 MAX_SEARCH_CANDIDATES = 30  # 먼저 비교할 관련 Chunk 후보 수
@@ -21,6 +26,7 @@ def get_bid_vector_store(bid_ntce_no):  # 공고번호 전용 Chroma DB를 불�
         collection_name=get_collection_name(bid_ntce_no),  # 해당 공고 컬렉션 선택
         persist_directory=str(db_path),  # 저장된 Chroma 연결
         embedding_function=embeddings,  # 질문과 문서 벡터 비교에 사용
+        relevance_score_fn=normalize_l2_relevance_score,
     )
 
 

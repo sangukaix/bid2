@@ -1,7 +1,8 @@
-from django.contrib.auth import authenticate, get_user_model
-from rest_framework import serializers
-
 from pathlib import Path
+
+from django.contrib.auth import authenticate, get_user_model
+from pptx import Presentation
+from rest_framework import serializers
 
 from .models import CompanyDocument, CompanyProfile
 
@@ -79,8 +80,6 @@ class CompanyProfileSerializer(serializers.ModelSerializer):
             "excluded_keywords",
             "preferred_bid_type",
             "preferred_region",
-            "min_bid_amount",
-            "max_bid_amount",
             "created_at",
             "updated_at",
         ]
@@ -105,7 +104,6 @@ class CompanyDocumentSerializer(serializers.ModelSerializer):
             "file",
             "original_name",
             "document_type",
-            "target_company",
             "uploaded_at",
         ]
         read_only_fields = ["id", "original_name", "uploaded_at"]
@@ -116,7 +114,26 @@ class CompanyDocumentSerializer(serializers.ModelSerializer):
 
         if extension not in allowed_extensions:
             raise serializers.ValidationError("Word, PowerPoint, HWP, HWPX 파일만 업로드할 수 있습니다.")
-        if uploaded_file.size > 20 * 1024 * 1024:
-            raise serializers.ValidationError("파일 한 개의 크기는 20MB를 초과할 수 없습니다.")
+        max_size_mb = 100 if extension == ".pptx" else 20
+        if uploaded_file.size > max_size_mb * 1024 * 1024:
+            raise serializers.ValidationError(
+                f"파일 한 개의 크기는 {max_size_mb}MB를 초과할 수 없습니다."
+            )
+
+        if extension == ".pptx":
+            try:
+                presentation = Presentation(uploaded_file)
+                if len(presentation.slides) > 100:
+                    raise serializers.ValidationError(
+                        "PowerPoint 제안서는 최대 100장까지 업로드할 수 있습니다."
+                    )
+            except serializers.ValidationError:
+                raise
+            except Exception as error:
+                raise serializers.ValidationError(
+                    "올바른 PowerPoint(.pptx) 파일인지 확인해 주세요."
+                ) from error
+            finally:
+                uploaded_file.seek(0)
 
         return uploaded_file

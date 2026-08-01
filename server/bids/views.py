@@ -1,12 +1,15 @@
 from datetime import timedelta
 from io import StringIO
 from pathlib import Path
+import re
+import time
 
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.management import call_command
 from django.core.paginator import EmptyPage, Paginator
+from django.db import OperationalError
 from django.db.models import Count, F, Max, Q
-from django.db.models.functions import Coalesce
 from django.http import FileResponse, JsonResponse
 from django.utils import timezone
 from rest_framework import status
@@ -19,13 +22,25 @@ from rest_framework.response import Response
 from .models import BidAnalysis, BidChatMessage, BidNotice, BidProposal, CompanyDocument, CompanyProfile, RecommendedBid, SavedBid
 from .serializers import CompanyDocumentSerializer, CompanyProfileSerializer, LoginSerializer, SignupSerializer
 from .services.business_registration import extract_business_registration
-from .services.recommendation import delete_expired_recommendations, get_profile_keywords
+from .services.recommendation import get_profile_keywords
 
 
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
 RECOMMENDATION_LIMIT = 20
 MAX_CHAT_QUESTION_LENGTH = 500  # 지나치게 긴 질문과 AI 비용을 제한
+PROPOSAL_REVISION_HINTS = (
+    "수정해",
+    "수정해줘",
+    "바꿔",
+    "변경해",
+    "추가해",
+    "삭제해",
+    "넣어줘",
+    "작성해",
+    "만들어",
+    "반영해",
+)
 PREFERRED_BID_TYPE_MAP = {
     "service": "용역",
     "goods": "물품",
@@ -55,8 +70,26 @@ REGIONS = {
     "gyeongnam": "경남",
     "jeju": "제주",
 }
+
+
+def save_with_sqlite_retry(instance, attempts=3):
+    """로컬 SQLite가 잠시 사용 중이면 AI 결과 저장을 짧게 재시도합니다."""
+
+    for attempt in range(attempts):
+        try:
+            instance.save()
+            return
+        except OperationalError as error:
+            is_locked = "database is locked" in str(error).lower()
+            if not is_locked or attempt == attempts - 1:
+                raise
+            time.sleep(attempt + 1)
+
+
 DEADLINE_DAYS = {0, 3, 7, 30}
 DEADLINE_SORTS = {"asc", "desc"}
+NOTICE_SORTS = {"asc", "desc"}
+CONTRACT_METHODS = {"제한경쟁", "수의계약", "일반경쟁"}
 REGION_ALIASES = {
     "충북": ("충북", "충청북도"),
     "충남": ("충남", "충청남도"),
@@ -305,6 +338,9 @@ def serialize_notice(notice, match_reasons=None):
     item["regionLimit"] = notice.region_limit
     item["allowedRegion"] = notice.allowed_region or "전국"
     item["bidNtceUrl"] = item.get("bidNtceUrl") or notice.source_url
+    item["ntceInsttNm"] = item.get("ntceInsttNm") or notice.notice_organization
+    item["dminsttNm"] = item.get("dminsttNm") or notice.demand_organization
+    item["cntrctCnclsMthdNm"] = item.get("cntrctCnclsMthdNm") or notice.contract_method
 
     if match_reasons is not None:
         item["matchReasons"] = match_reasons
@@ -312,12 +348,31 @@ def serialize_notice(notice, match_reasons=None):
     return item
 
 
+CURRENT_PROPOSAL_VERSION = "template_generation_v1"
+
+
+def is_current_proposal(proposal):
+    """현재 Bid2 템플릿 방식으로 생성한 제안서인지 확인합니다."""
+
+    return bool(
+        proposal
+        and (proposal.revision_plan or {}).get("version")
+        == CURRENT_PROPOSAL_VERSION
+    )
+
+
 def serialize_saved_bid(saved_bid):
     item = serialize_notice(saved_bid.bid_notice)  # 연결된 입찰공고를 JSON 형태로 변환
     item["savedAt"] = saved_bid.created_at
     item["hasChat"] = bool(saved_bid.chat_messages.all())
     item["hasAnalysis"] = hasattr(saved_bid, "analysis")
-    item["hasProposal"] = hasattr(saved_bid, "proposal")
+    item["hasProposal"] = is_current_proposal(
+        getattr(saved_bid, "proposal", None)
+    )
+    item["hasProposalProject"] = bool(
+        saved_bid.proposal_started_at or item["hasProposal"]
+    )
+    item["proposalProjectStartedAt"] = saved_bid.proposal_started_at
     return item
 
 
@@ -336,12 +391,15 @@ def serialize_recommendation(recommendation):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def stored_recommendation_list(request):
-    delete_expired_recommendations(request.user)  # 추천 페이지를 열 때 지난 공고를 DB에서 정리
-
     recommendations = RecommendedBid.objects.filter(
         user=request.user,
         bid_notice__is_active=True,
         is_match=True,
+    ).exclude(
+        bid_notice__deadline_status=BidNotice.DeadlineStatus.EXPIRED,
+    ).filter(
+        Q(bid_notice__close_at__isnull=True)
+        | Q(bid_notice__close_at__gte=timezone.now())
     ).select_related("bid_notice").order_by(
         "-match_score",
         "-title_match_count",
@@ -422,18 +480,54 @@ def saved_bid_list(request):
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated])
 def saved_bid_delete(request, bid_ntce_no):
-    deleted_count, _ = SavedBid.objects.filter(
+    saved_bid = SavedBid.objects.filter(
         user=request.user,
         bid_notice__bid_ntce_no=bid_ntce_no,
-    ).delete()  # 현재 회원이 저장한 해당 공고만 삭제
+    ).first()
 
-    if deleted_count == 0:
+    if saved_bid is None:
         return Response(
             {"error": "저장한 입찰공고를 찾을 수 없습니다."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
+    if saved_bid.proposal_started_at or hasattr(saved_bid, "proposal"):
+        return Response(
+            {"error": "진행 중인 제안서 프로젝트가 있어 저장을 취소할 수 없습니다. 프로젝트를 먼저 삭제해 주세요."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    saved_bid.delete()  # 프로젝트가 없는 저장 공고만 취소
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["POST", "DELETE"])
+@permission_classes([IsAuthenticated])
+def start_bid_proposal_project(request, bid_ntce_no):
+    """제안서 화면을 연 공고를 사용자별 프로젝트로 기록합니다."""
+
+    saved_bid = SavedBid.objects.filter(
+        user=request.user,
+        bid_notice__bid_ntce_no=bid_ntce_no,
+    ).select_related("bid_notice").first()
+    if saved_bid is None:
+        return Response(
+            {"error": "저장한 입찰공고를 찾을 수 없습니다."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "DELETE":
+        BidProposal.objects.filter(saved_bid=saved_bid).delete()
+        saved_bid.chat_messages.all().delete()
+        saved_bid.proposal_started_at = None
+        saved_bid.save(update_fields=["proposal_started_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    if saved_bid.proposal_started_at is None:
+        saved_bid.proposal_started_at = timezone.now()
+        saved_bid.save(update_fields=["proposal_started_at"])
+
+    return Response(serialize_saved_bid(saved_bid))
 
 
 def build_match_reasons(
@@ -461,12 +555,6 @@ def build_match_reasons(
 
     if preferred_regions:
         reasons.append("전국 참가 가능" if not notice.region_limit else "희망 지역 일치")
-
-    if profile and (
-        profile.min_bid_amount is not None
-        or profile.max_bid_amount is not None
-    ):
-        reasons.append("희망 금액 범위 포함")
 
     return reasons
 
@@ -531,20 +619,6 @@ def recommended_bid_list(request):
     if preferred_regions:
         notices = notices.filter(build_region_condition(preferred_regions))
 
-    if profile and (
-        profile.min_bid_amount is not None
-        or profile.max_bid_amount is not None
-    ):
-        notices = notices.annotate(
-            recommendation_amount=Coalesce("budget_amount", "estimated_price")
-        )  # 배정예산이 없으면 추정가격을 추천 금액으로 사용
-
-        if profile.min_bid_amount is not None:
-            notices = notices.filter(recommendation_amount__gte=profile.min_bid_amount)
-
-        if profile.max_bid_amount is not None:
-            notices = notices.filter(recommendation_amount__lte=profile.max_bid_amount)
-
     notices = notices.order_by("-notice_date", "-id")
     total_count = notices.count()
     recommended_notices = notices[:RECOMMENDATION_LIMIT]
@@ -581,6 +655,7 @@ def filter_notices(notices, request):
     deadline_status = request.GET.get("deadline_status", "").strip()
     region = request.GET.get("region", "").strip()
     deadline_days = request.GET.get("deadline_days", "").strip()
+    contract_method = request.GET.get("contract_method", "").strip()
 
     if query:
         notices = notices.filter(
@@ -608,6 +683,11 @@ def filter_notices(notices, request):
         if business_type not in BUSINESS_TYPES:
             raise ValueError("business_type is not valid.")
         notices = notices.filter(business_type=business_type)
+
+    if contract_method:
+        if contract_method not in CONTRACT_METHODS:
+            raise ValueError("contract_method is not valid.")
+        notices = notices.filter(contract_method__icontains=contract_method)
 
     if deadline_status:
         if deadline_status not in DEADLINE_STATUSES:
@@ -668,6 +748,9 @@ def bid_list(request):
     deadline_sort = request.GET.get("deadline_sort", "").strip()
     if deadline_sort and deadline_sort not in DEADLINE_SORTS:
         return JsonResponse({"error": "deadline_sort is not valid."}, status=400)
+    notice_sort = request.GET.get("notice_sort", "").strip()
+    if notice_sort and notice_sort not in NOTICE_SORTS:
+        return JsonResponse({"error": "notice_sort is not valid."}, status=400)
 
     notices = BidNotice.objects.filter(is_active=True)
 
@@ -682,7 +765,11 @@ def bid_list(request):
         services=Count("id", filter=Q(business_type="용역")),
         construction=Count("id", filter=Q(business_type="공사")),
     )
-    if deadline_sort == "asc":
+    if notice_sort == "asc":
+        notices = notices.order_by(F("notice_date").asc(nulls_last=True), "id")
+    elif notice_sort == "desc":
+        notices = notices.order_by(F("notice_date").desc(nulls_last=True), "-id")
+    elif deadline_sort == "asc":
         notices = notices.order_by(F("close_at").asc(nulls_last=True), "-id")
     elif deadline_sort == "desc":
         notices = notices.order_by(F("close_at").desc(nulls_last=True), "-id")
@@ -736,10 +823,41 @@ def generate_bid_chat_answer(bid_ntce_no, question):
     return ask_bid_question(bid_ntce_no, question)
 
 
+def serialize_chat_message(message):
+    """DB 대화 한 건을 삭제 상태까지 포함해 화면용 JSON으로 만듭니다."""
+
+    return {
+        "id": message.id,
+        "role": message.role,
+        "text": (
+            "삭제된 메시지입니다."
+            if message.is_deleted
+            else message.content
+        ),
+        "sources": [] if message.is_deleted else message.sources,
+        "messageType": message.message_type,
+        "status": message.status,
+        "isDeleted": message.is_deleted,
+        "createdAt": message.created_at,
+    }
+
+
+def detect_assistant_intent(message, has_proposal, requested_intent="auto"):
+    """한 대화창의 입력을 공고 질문 또는 제안서 수정 요청으로 분류합니다."""
+
+    if requested_intent in {"question", "revision"}:
+        return requested_intent
+    if has_proposal and any(
+        keyword in message for keyword in PROPOSAL_REVISION_HINTS
+    ):
+        return "revision"
+    return "question"
+
+
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def bid_chat(request, bid_ntce_no):
-    """공고번호와 질문을 받아 AI 답변과 출처를 반환합니다."""
+    """공고 질문과 제안서 수정 요청을 하나의 대화 기록으로 관리합니다."""
     notice = (
         BidNotice.objects.filter(bid_ntce_no=bid_ntce_no, is_active=True)
         .order_by("-bid_ntce_ord")
@@ -760,18 +878,19 @@ def bid_chat(request, bid_ntce_no):
         return Response(
             {
                 "messages": [
-                    {
-                        "id": message.id,
-                        "role": message.role,
-                        "text": message.content,
-                        "sources": message.sources,
-                    }
+                    serialize_chat_message(message)
                     for message in saved_bid.chat_messages.all()
-                ]
+                ],
+                "pendingRevisionCount": saved_bid.chat_messages.filter(
+                    role=BidChatMessage.Role.USER,
+                    message_type=BidChatMessage.MessageType.PROPOSAL,
+                    status=BidChatMessage.Status.PENDING,
+                    is_deleted=False,
+                ).count(),
             }
         )
 
-    question = request.data.get("question")
+    question = request.data.get("message", request.data.get("question"))
 
     if not isinstance(question, str) or not question.strip():
         return Response(
@@ -780,9 +899,119 @@ def bid_chat(request, bid_ntce_no):
         )
 
     question = question.strip()
+    if len(question) > 1000:
+        return Response(
+            {"error": "메시지는 1,000자 이하로 입력해 주세요."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    proposal = getattr(saved_bid, "proposal", None)
+    intent = detect_assistant_intent(
+        question,
+        is_current_proposal(proposal),
+        str(request.data.get("intent", "auto")),
+    )
+    if intent == "revision":
+        if not is_current_proposal(proposal):
+            return Response(
+                {"error": "먼저 제안서 초안을 만들어 주세요."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        requested_slide_counts = [
+            int(value)
+            for value in re.findall(r"(\d{2,3})\s*(?:장|페이지|슬라이드)", question)
+        ]
+        if any(count > 50 for count in requested_slide_counts):
+            user_message = BidChatMessage.objects.create(
+                saved_bid=saved_bid,
+                role=BidChatMessage.Role.USER,
+                message_type=BidChatMessage.MessageType.PROPOSAL,
+                status=BidChatMessage.Status.APPLIED,
+                content=question,
+            )
+            assistant_message = BidChatMessage.objects.create(
+                saved_bid=saved_bid,
+                role=BidChatMessage.Role.ASSISTANT,
+                message_type=BidChatMessage.MessageType.PROPOSAL,
+                status=BidChatMessage.Status.APPLIED,
+                content="현재 제안서는 최대 50장까지만 제작할 수 있습니다. 50장 이내의 구성으로 요청해 주세요.",
+            )
+            return Response(
+                {
+                    "intent": "revision",
+                    "messages": [
+                        serialize_chat_message(user_message),
+                        serialize_chat_message(assistant_message),
+                    ],
+                    "pendingRevisionCount": 0,
+                }
+            )
+        if any(keyword in question for keyword in ("그래프", "차트", "사진", "이미지")):
+            user_message = BidChatMessage.objects.create(
+                saved_bid=saved_bid,
+                role=BidChatMessage.Role.USER,
+                message_type=BidChatMessage.MessageType.PROPOSAL,
+                status=BidChatMessage.Status.APPLIED,
+                content=question,
+            )
+            assistant_message = BidChatMessage.objects.create(
+                saved_bid=saved_bid,
+                role=BidChatMessage.Role.ASSISTANT,
+                message_type=BidChatMessage.MessageType.PROPOSAL,
+                status=BidChatMessage.Status.APPLIED,
+                content=(
+                    "웹에서 출처가 확인된 자료를 찾아 문구와 수치로 반영할 수 있습니다. "
+                    "다만 현재 버전은 그래프나 외부 이미지를 슬라이드에 자동 삽입하지 못합니다. "
+                    "필요하면 ‘웹 검색한 수치를 출처와 함께 텍스트 슬라이드로 추가해줘’라고 요청해 주세요."
+                ),
+            )
+            return Response(
+                {
+                    "intent": "revision",
+                    "messages": [
+                        serialize_chat_message(user_message),
+                        serialize_chat_message(assistant_message),
+                    ],
+                    "pendingRevisionCount": 0,
+                }
+            )
+        message = BidChatMessage.objects.create(
+            saved_bid=saved_bid,
+            role=BidChatMessage.Role.USER,
+            message_type=BidChatMessage.MessageType.PROPOSAL,
+            status=BidChatMessage.Status.PENDING,
+            content=question,
+            sources=[
+                {"slide_number": request.data.get("slide_number")}
+            ],
+        )
+        assistant_message = BidChatMessage.objects.create(
+            saved_bid=saved_bid,
+            role=BidChatMessage.Role.ASSISTANT,
+            message_type=BidChatMessage.MessageType.PROPOSAL,
+            status=BidChatMessage.Status.APPLIED,
+            content="가능합니다. 요청하신 내용을 제안서에 반영할까요?",
+        )
+        return Response(
+            {
+                "intent": "revision",
+                "messages": [
+                    serialize_chat_message(message),
+                    serialize_chat_message(assistant_message),
+                ],
+                "pendingRevisionCount": saved_bid.chat_messages.filter(
+                    role=BidChatMessage.Role.USER,
+                    message_type=BidChatMessage.MessageType.PROPOSAL,
+                    status=BidChatMessage.Status.PENDING,
+                    is_deleted=False,
+                ).count(),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
     if len(question) > MAX_CHAT_QUESTION_LENGTH:
         return Response(
-            {"error": f"질문은 {MAX_CHAT_QUESTION_LENGTH}자 이하로 입력해 주세요."},
+            {"error": f"공고 질문은 {MAX_CHAT_QUESTION_LENGTH}자 이하로 입력해 주세요."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -799,19 +1028,56 @@ def bid_chat(request, bid_ntce_no):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    BidChatMessage.objects.create(
+    user_message = BidChatMessage.objects.create(
         saved_bid=saved_bid,
         role=BidChatMessage.Role.USER,
+        message_type=BidChatMessage.MessageType.QUESTION,
         content=question,
     )
-    BidChatMessage.objects.create(
+    assistant_message = BidChatMessage.objects.create(
         saved_bid=saved_bid,
         role=BidChatMessage.Role.ASSISTANT,
+        message_type=BidChatMessage.MessageType.QUESTION,
         content=result["answer"],
         sources=result.get("sources", []),
     )  # 답변 생성에 성공한 대화만 DB에 저장
 
-    return Response(result)  # answer와 sources를 Next.js에 JSON으로 전달
+    return Response(
+        {
+            **result,
+            "intent": "question",
+            "messages": [
+                serialize_chat_message(user_message),
+                serialize_chat_message(assistant_message),
+            ],
+        }
+    )  # answer와 sources를 Next.js에 전달
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def bid_chat_message_delete(request, bid_ntce_no, message_id):
+    """대화 위치는 유지하고 내용만 삭제 표시로 바꿉니다."""
+
+    message = BidChatMessage.objects.filter(
+        id=message_id,
+        saved_bid__user=request.user,
+        saved_bid__bid_notice__bid_ntce_no=bid_ntce_no,
+    ).first()
+    if message is None:
+        return Response(
+            {"error": "삭제할 메시지를 찾을 수 없습니다."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    message.content = ""
+    message.sources = []
+    message.is_deleted = True
+    message.deleted_at = timezone.now()
+    message.save(
+        update_fields=["content", "sources", "is_deleted", "deleted_at"]
+    )
+    return Response({"message": serialize_chat_message(message)})
 
 
 @api_view(["GET", "POST"])
@@ -900,58 +1166,80 @@ def bid_analysis_pdf(request, bid_ntce_no):
 
 
 def serialize_bid_proposal(proposal):
+    revision_plan = proposal.revision_plan or {}
+    proposal_status = revision_plan.get("status", "final")
     return {
         "id": proposal.id,
+        "status": proposal_status,
         "output_format": proposal.output_format,
         "template_mode": proposal.template_mode,
-        "source_document": {
-            "id": proposal.source_document_id,
-            "original_name": (
-                proposal.source_document.original_name
-                if proposal.source_document
-                else "삭제된 원본 문서"
-            ),
-            "target_company": (
-                proposal.source_document.target_company
-                if proposal.source_document
-                else ""
-            ),
-            "uploaded_at": (
-                proposal.source_document.uploaded_at
-                if proposal.source_document
-                else None
-            ),
-        },
         "strategy": proposal.strategy,
-        "draft": proposal.draft,
+        "revision_plan": revision_plan,
         "created_at": proposal.created_at,
         "updated_at": proposal.updated_at,
+        "preview_url": (
+            f"/api/bids/{proposal.saved_bid.bid_notice.bid_ntce_no}/proposal/preview/"
+        ),
         "download_url": (
             f"/api/bids/{proposal.saved_bid.bid_notice.bid_ntce_no}/proposal/download/"
         ),
     }
 
 
-def serialize_proposal_source(document):
-    return {
-        "id": document.id,
-        "original_name": document.original_name,
-        "target_company": document.target_company,
-        "uploaded_at": document.uploaded_at,
-    }
+def serialize_proposal_templates():
+    """settings의 허용된 템플릿만 웹에 전달합니다."""
+
+    from pptx import Presentation
+
+    templates = []
+    for template_id, template in settings.PROPOSAL_TEMPLATES.items():
+        template_path = Path(template["path"])
+        slide_count = template["target_slides"]
+        if template_path.exists():
+            slide_count = len(Presentation(template_path).slides)
+        templates.append({
+            "id": template_id,
+            "name": template["name"],
+            "description": template["description"],
+            "available": template_path.exists(),
+            "target_slides": template["target_slides"],
+            "slide_count": slide_count,
+            "preview_url": f"/api/proposal-templates/{template_id}/slides/",
+        })
+    return templates
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def proposal_template_slide_preview(request, template_id, slide_number):
+    """템플릿 선택 화면에 실제 PPT 슬라이드 이미지를 제공합니다."""
+
+    try:
+        from .services.proposal_preview import get_template_slide_preview
+
+        image_path, slide_count = get_template_slide_preview(
+            template_id,
+            slide_number,
+        )
+    except ValueError as error:
+        return Response({"error": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+
+    response = FileResponse(open(image_path, "rb"), content_type="image/png")
+    response["X-Slide-Count"] = str(slide_count)
+    return response
 
 
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def bid_proposal(request, bid_ntce_no):
-    """저장 공고의 맞춤형 제안서를 생성하거나 기존 결과를 조회합니다."""
+    """저장 공고와 회사 자료를 바탕으로 맞춤 제안서를 생성합니다."""
 
     saved_bid = (
         SavedBid.objects.filter(
             user=request.user,
             bid_notice__bid_ntce_no=bid_ntce_no,
         )
-        .select_related("bid_notice", "proposal__source_document")
+        .select_related("bid_notice", "proposal")
         .first()
     )
     if saved_bid is None:
@@ -960,70 +1248,59 @@ def bid_proposal(request, bid_ntce_no):
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    source_documents = CompanyDocument.objects.filter(
-        user=request.user,
-        document_type=CompanyDocument.DocumentType.PROPOSAL,
-    )
     existing_proposal = BidProposal.objects.filter(saved_bid=saved_bid).select_related(
-        "source_document",
         "saved_bid__bid_notice",
     ).first()
 
     if request.method == "GET":
+        current_proposal = (
+            existing_proposal
+            if is_current_proposal(existing_proposal)
+            else None
+        )
+        selected_template_id = (
+            (current_proposal.revision_plan or {}).get("template_id")
+            if current_proposal
+            else settings.PROPOSAL_DEFAULT_TEMPLATE_ID
+        ) or settings.PROPOSAL_DEFAULT_TEMPLATE_ID
         return Response(
             {
                 "proposal": (
-                    serialize_bid_proposal(existing_proposal)
-                    if existing_proposal
+                    serialize_bid_proposal(current_proposal)
+                    if current_proposal
                     else None
                 ),
-                "source_documents": [
-                    serialize_proposal_source(document)
-                    for document in source_documents
-                ],
+                "templates": serialize_proposal_templates(),
+                "selected_template_id": selected_template_id,
             }
         )
 
-    if existing_proposal is not None:
+    is_current_revision = is_current_proposal(existing_proposal)
+    regenerate = request.data.get("regenerate") in (True, "true", "1", 1)
+    if is_current_revision and not regenerate:
         return Response(
             {"proposal": serialize_bid_proposal(existing_proposal)}
         )  # 이미 만든 결과를 재사용해 중복 OpenAI 비용 방지
 
-    if not source_documents.exists():
+    generation_mode = request.data.get("generation_mode", "default_template")
+    if generation_mode != "default_template":
         return Response(
-            {"error": "회사정보에서 기존 제안서를 1개 이상 등록해 주세요."},
+            {"error": "현재는 등록된 제안서 템플릿으로만 생성할 수 있습니다."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    try:
-        source_document_id = int(request.data.get("source_document_id", ""))
-    except (TypeError, ValueError):
+    template_id = str(
+        request.data.get("template_id", settings.PROPOSAL_DEFAULT_TEMPLATE_ID)
+    )
+    template = settings.PROPOSAL_TEMPLATES.get(template_id)
+    if template is None:
         return Response(
-            {"error": "참고할 기존 제안서를 선택해 주세요."},
+            {"error": "선택한 제안서 템플릿을 찾을 수 없습니다."},
             status=status.HTTP_400_BAD_REQUEST,
         )
-
-    source_document = source_documents.filter(id=source_document_id).first()
-    if source_document is None:
+    if not Path(template["path"]).exists():
         return Response(
-            {"error": "선택한 회사 제안서를 찾을 수 없습니다."},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    output_format = str(request.data.get("output_format", "")).lower()
-    if output_format not in {
-        BidProposal.OutputFormat.DOCX,
-        BidProposal.OutputFormat.PPTX,
-    }:
-        return Response(
-            {"error": "출력 형식은 Word 또는 PowerPoint만 선택할 수 있습니다."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    source_extension = Path(source_document.original_name).suffix.lower()
-    if source_extension in {".hwp", ".hwpx"} and output_format != BidProposal.OutputFormat.DOCX:
-        return Response(
-            {"error": "HWP 또는 HWPX 원본의 결과 형식은 Word만 선택할 수 있습니다."},
+            {"error": "선택한 제안서 템플릿 파일이 아직 준비되지 않았습니다."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -1034,42 +1311,381 @@ def bid_proposal(request, bid_ntce_no):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    try:
-        from .services.rag.proposal import generate_bid_proposal
+    previous_revision_plan = (
+        dict(existing_proposal.revision_plan or {})
+        if existing_proposal
+        else None
+    )
+    if existing_proposal:
+        existing_proposal.revision_plan = {
+            **previous_revision_plan,
+            "status": "generating",
+        }
+        save_with_sqlite_retry(existing_proposal)
 
-        result = generate_bid_proposal(
+    try:
+        from .services.rag.proposal import create_bid_proposal_from_template
+
+        result = create_bid_proposal_from_template(
             saved_bid=saved_bid,
             profile=profile,
-            source_document=source_document,
-            output_format=output_format,
+            template_path=template["path"],
+            target_slide_count=template["target_slides"],
         )
     except ValueError as error:
+        if existing_proposal:
+            existing_proposal.revision_plan = previous_revision_plan
+            save_with_sqlite_retry(existing_proposal)
         return Response({"error": str(error)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception:
+        if existing_proposal:
+            existing_proposal.revision_plan = previous_revision_plan
+            save_with_sqlite_retry(existing_proposal)
         return Response(
             {"error": "맞춤형 제안서를 생성하지 못했습니다."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    proposal = BidProposal(
-        saved_bid=saved_bid,
-        source_document=source_document,
-        output_format=output_format,
-        template_mode=result["template_mode"],
-        strategy=result["strategy"],
-        draft=result["draft"],
+    proposal = existing_proposal or BidProposal(saved_bid=saved_bid)
+    previous_file_name = (
+        proposal.generated_file.name
+        if proposal.generated_file
+        else ""
     )
+    proposal.output_format = BidProposal.OutputFormat.PPTX
+    proposal.template_mode = result["template_mode"]
+    proposal.strategy = result["strategy"]
+    proposal.revision_plan = {
+        **result["revision_plan"],
+        "template_id": template_id,
+        "template_name": template["name"],
+        "status": "draft",
+        "feedback_history": [],
+    }
     proposal.generated_file.save(
         result["filename"],
         ContentFile(result["file_bytes"]),
         save=False,
     )
-    proposal.save()
+    try:
+        save_with_sqlite_retry(proposal)
+    except Exception:
+        proposal.generated_file.delete(save=False)  # DB 저장 실패 시 고아 파일을 남기지 않음
+        if existing_proposal:
+            proposal.generated_file.name = previous_file_name
+            proposal.revision_plan = previous_revision_plan
+            save_with_sqlite_retry(proposal)
+        return Response(
+            {"error": "제안서는 생성됐지만 저장하지 못했습니다. 잠시 후 다시 시도해 주세요."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    from .services.proposal_preview import delete_proposal_preview
+
+    delete_proposal_preview(proposal)
+    if previous_file_name and previous_file_name != proposal.generated_file.name:
+        proposal.generated_file.storage.delete(previous_file_name)
 
     return Response(
         {"proposal": serialize_bid_proposal(proposal)},
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def bid_proposal_preview(request, bid_ntce_no):
+    """현재 제안서 초안을 PDF로 변환해 브라우저 미리보기에 전달합니다."""
+
+    proposal = (
+        BidProposal.objects.filter(
+            saved_bid__user=request.user,
+            saved_bid__bid_notice__bid_ntce_no=bid_ntce_no,
+        )
+        .select_related("saved_bid__bid_notice", "saved_bid__user")
+        .first()
+    )
+    if proposal is None or not proposal.generated_file:
+        return Response(
+            {"error": "미리볼 제안서가 없습니다."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if (proposal.revision_plan or {}).get("status") == "generating":
+        return Response(
+            {"error": "제안서 생성이 끝난 뒤 수정해 주세요."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    try:
+        from .services.proposal_preview import create_proposal_preview
+
+        preview_path = create_proposal_preview(proposal)
+    except ValueError as error:
+        return Response({"error": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return FileResponse(
+        open(preview_path, "rb"),
+        as_attachment=False,
+        filename=f"proposal-preview-{bid_ntce_no}.pdf",
+        content_type="application/pdf",
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bid_proposal_feedback(request, bid_ntce_no):
+    """미리보기 이후 사용자의 요청을 현재 제안서 초안에 반영합니다."""
+
+    proposal = (
+        BidProposal.objects.filter(
+            saved_bid__user=request.user,
+            saved_bid__bid_notice__bid_ntce_no=bid_ntce_no,
+        )
+        .select_related("saved_bid__bid_notice", "saved_bid__user")
+        .first()
+    )
+    if proposal is None or not proposal.generated_file:
+        return Response(
+            {"error": "먼저 제안서 초안을 만들어 주세요."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if (proposal.revision_plan or {}).get("status") == "generating":
+        return Response(
+            {"error": "제안서 생성이 끝난 뒤 수정해 주세요."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    direct_instruction = str(request.data.get("instruction", "")).strip()
+    direct_slide_number = request.data.get("slide_number")
+    confirmation = str(request.data.get("confirmation", "")).strip()
+    cancel_requested = request.data.get("cancel") in (True, "true", "1", 1)
+    pending_messages = list(
+        proposal.saved_bid.chat_messages.filter(
+            role=BidChatMessage.Role.USER,
+            message_type=BidChatMessage.MessageType.PROPOSAL,
+            status=BidChatMessage.Status.PENDING,
+            is_deleted=False,
+        )
+    )
+    if direct_instruction:
+        direct_message = BidChatMessage.objects.create(
+            saved_bid=proposal.saved_bid,
+            role=BidChatMessage.Role.USER,
+            message_type=BidChatMessage.MessageType.PROPOSAL,
+            status=BidChatMessage.Status.PENDING,
+            content=direct_instruction,
+            sources=[{"slide_number": direct_slide_number}],
+        )
+        pending_messages.append(direct_message)
+
+    if confirmation:
+        BidChatMessage.objects.create(
+            saved_bid=proposal.saved_bid,
+            role=BidChatMessage.Role.USER,
+            message_type=BidChatMessage.MessageType.PROPOSAL,
+            status=BidChatMessage.Status.APPLIED,
+            content=confirmation,
+        )
+
+    if cancel_requested and pending_messages:
+        BidChatMessage.objects.filter(
+            id__in=[message.id for message in pending_messages]
+        ).update(status=BidChatMessage.Status.FAILED)
+        assistant_message = BidChatMessage.objects.create(
+            saved_bid=proposal.saved_bid,
+            role=BidChatMessage.Role.ASSISTANT,
+            message_type=BidChatMessage.MessageType.PROPOSAL,
+            status=BidChatMessage.Status.APPLIED,
+            content="수정 요청을 취소했습니다. 현재 제안서는 변경하지 않았습니다.",
+        )
+        return Response(
+            {
+                "proposal": serialize_bid_proposal(proposal),
+                "message": serialize_chat_message(assistant_message),
+                "pendingRevisionCount": 0,
+            }
+        )
+
+    if not pending_messages:
+        return Response(
+            {"error": "반영할 제안서 수정 요청이 없습니다."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    instructions = []
+    for message in pending_messages:
+        metadata = message.sources[0] if message.sources else {}
+        target = metadata.get("slide_number")
+        instructions.append(
+            f"{target}페이지: {message.content}"
+            if target not in (None, "")
+            else message.content
+        )
+    instruction = "\n".join(instructions)
+    if len(instruction) > 3000:
+        return Response(
+            {"error": "한 번에 반영할 수정 요청은 합계 3,000자 이내로 입력해 주세요."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    slide_number = None
+    if len(pending_messages) == 1:
+        metadata = (
+            pending_messages[0].sources[0]
+            if pending_messages[0].sources
+            else {}
+        )
+        slide_number = metadata.get("slide_number")
+    if slide_number not in (None, ""):
+        try:
+            slide_number = int(slide_number)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "슬라이드 번호를 확인해 주세요."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    else:
+        slide_number = None
+
+    profile = CompanyProfile.objects.filter(user=request.user).first()
+    if profile is None:
+        return Response(
+            {"error": "회사 정보를 먼저 입력해 주세요."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        from .services.rag.proposal import revise_proposal_with_feedback
+
+        result = revise_proposal_with_feedback(
+            saved_bid=proposal.saved_bid,
+            profile=profile,
+            proposal=proposal,
+            instruction=instruction,
+            slide_number=slide_number,
+        )
+    except ValueError as error:
+        BidChatMessage.objects.filter(
+            id__in=[message.id for message in pending_messages]
+        ).update(status=BidChatMessage.Status.FAILED)
+        return Response({"error": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception:
+        BidChatMessage.objects.filter(
+            id__in=[message.id for message in pending_messages]
+        ).update(status=BidChatMessage.Status.FAILED)
+        return Response(
+            {"error": "수정 요청을 제안서에 반영하지 못했습니다."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    previous_file_name = proposal.generated_file.name
+    current_plan = dict(proposal.revision_plan or {})
+    feedback_plan = result["revision_plan"]
+    feedback_history = list(current_plan.get("feedback_history", []))
+    feedback_history.append(
+        {
+            "instruction": instruction,
+            "slide_number": slide_number,
+            "summary": feedback_plan.get("summary", ""),
+            "created_at": timezone.now().isoformat(),
+        }
+    )
+    current_plan["status"] = "draft"
+    current_plan["summary"] = feedback_plan.get("summary", current_plan.get("summary", ""))
+    current_plan["output_slide_count"] = result["output_slide_count"]
+    current_plan["feedback_history"] = feedback_history
+    current_plan["revision_log"] = [
+        *current_plan.get("revision_log", []),
+        *result.get("revision_log", []),
+    ]
+    current_plan["quality_review"] = result.get(
+        "quality_review",
+        current_plan.get("quality_review", {}),
+    )
+    current_plan["final_review_items"] = list(
+        dict.fromkeys(
+            [
+                *current_plan.get("final_review_items", []),
+                *feedback_plan.get("final_review_items", []),
+                *result.get("quality_review", {}).get("review_items", []),
+            ]
+        )
+    )
+
+    proposal.revision_plan = current_plan
+    proposal.generated_file.save(
+        result["filename"],
+        ContentFile(result["file_bytes"]),
+        save=False,
+    )
+    try:
+        save_with_sqlite_retry(proposal)
+    except Exception:
+        proposal.generated_file.delete(save=False)
+        return Response(
+            {"error": "수정본은 생성됐지만 저장하지 못했습니다."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    from .services.proposal_preview import delete_proposal_preview
+
+    delete_proposal_preview(proposal)
+    if previous_file_name and previous_file_name != proposal.generated_file.name:
+        proposal.generated_file.storage.delete(previous_file_name)
+
+    BidChatMessage.objects.filter(
+        id__in=[message.id for message in pending_messages]
+    ).update(status=BidChatMessage.Status.APPLIED)
+    assistant_message = BidChatMessage.objects.create(
+        saved_bid=proposal.saved_bid,
+        role=BidChatMessage.Role.ASSISTANT,
+        message_type=BidChatMessage.MessageType.PROPOSAL,
+        status=BidChatMessage.Status.APPLIED,
+        content=(
+            feedback_plan.get("summary")
+            or "요청사항을 제안서에 반영했습니다."
+        ),
+        sources=feedback_plan.get("sources", []),
+    )
+
+    return Response(
+        {
+            "proposal": serialize_bid_proposal(proposal),
+            "message": serialize_chat_message(assistant_message),
+            "pendingRevisionCount": 0,
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bid_proposal_finalize(request, bid_ntce_no):
+    """사용자가 미리보기를 마치면 현재 초안을 최종본으로 확정합니다."""
+
+    proposal = (
+        BidProposal.objects.filter(
+            saved_bid__user=request.user,
+            saved_bid__bid_notice__bid_ntce_no=bid_ntce_no,
+        )
+        .select_related("saved_bid__bid_notice")
+        .first()
+    )
+    if proposal is None or not proposal.generated_file:
+        return Response(
+            {"error": "확정할 제안서 초안이 없습니다."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if (proposal.revision_plan or {}).get("status") == "generating":
+        return Response(
+            {"error": "제안서 생성이 끝난 뒤 최종본을 만들어 주세요."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    proposal.revision_plan = {
+        **(proposal.revision_plan or {}),
+        "status": "final",
+        "finalized_at": timezone.now().isoformat(),
+    }
+    save_with_sqlite_retry(proposal)
+    return Response({"proposal": serialize_bid_proposal(proposal)})
 
 
 @api_view(["GET"])
@@ -1088,14 +1704,17 @@ def bid_proposal_download(request, bid_ntce_no):
             {"error": "생성된 제안서가 없습니다."},
             status=status.HTTP_404_NOT_FOUND,
         )
+    if (proposal.revision_plan or {}).get("status", "final") != "final":
+        return Response(
+            {"error": "미리보기 확인 후 제안서 만들기를 눌러 최종본을 확정해 주세요."},
+            status=status.HTTP_409_CONFLICT,
+        )
 
-    content_types = {
-        BidProposal.OutputFormat.DOCX: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        BidProposal.OutputFormat.PPTX: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    }
     return FileResponse(
         proposal.generated_file.open("rb"),
         as_attachment=True,
-        filename=f"proposal-{bid_ntce_no}.{proposal.output_format}",
-        content_type=content_types[proposal.output_format],
+        filename=f"bid2-proposal-{bid_ntce_no}.pptx",
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        ),
     )

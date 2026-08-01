@@ -17,7 +17,17 @@ from bids.management.commands.sync_bids import (
     determine_deadline_status,
     update_latest_notices,
 )
-from bids.models import BidAnalysis, BidChatMessage, BidNotice, BidProposal, CompanyDocument, CompanyProfile, RecommendedBid, SavedBid
+from bids.models import (
+    BidAnalysis,
+    BidChatMessage,
+    BidNotice,
+    BidProposal,
+    CompanyDocument,
+    CompanyKnowledgeItem,
+    CompanyProfile,
+    RecommendedBid,
+    SavedBid,
+)
 from bids.services.g2b_api import fetch_bid_notices
 from bids.services.rag.extract_document import extract_document
 from bids.services.rag.retriever import search_bid_documents
@@ -267,7 +277,6 @@ class CompanyDocumentViewTests(TestCase):
             {
                 "file": uploaded_file,
                 "document_type": "proposal",
-                "target_company": "한국가스공사",
             },
         )
         list_response = self.client.get("/api/company-documents/")
@@ -276,7 +285,6 @@ class CompanyDocumentViewTests(TestCase):
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(list_response.json()["count"], 1)
         self.assertEqual(list_response.json()["items"][0]["original_name"], "sample-proposal.docx")
-        self.assertEqual(list_response.json()["items"][0]["target_company"], "한국가스공사")
 
     def test_PDF_회사_문서는_업로드할_수_없다(self):
         self.client.force_login(self.user)
@@ -295,6 +303,36 @@ class CompanyDocumentViewTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("file", response.json())
+
+    def test_100장을_초과한_PowerPoint는_업로드할_수_없다(self):
+        from io import BytesIO
+
+        from pptx import Presentation
+
+        presentation = Presentation()
+        for _index in range(101):
+            presentation.slides.add_slide(presentation.slide_layouts[6])
+        buffer = BytesIO()
+        presentation.save(buffer)
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            "/api/company-documents/",
+            {
+                "file": SimpleUploadedFile(
+                    "too-long.pptx",
+                    buffer.getvalue(),
+                    content_type=(
+                        "application/vnd.openxmlformats-officedocument."
+                        "presentationml.presentation"
+                    ),
+                ),
+                "document_type": "proposal",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("100장", str(response.json()))
 
     def test_회사_문서는_최대_10개까지만_저장한다(self):
         self.client.force_login(self.user)
@@ -344,6 +382,124 @@ class CompanyDocumentViewTests(TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertFalse(CompanyDocument.objects.filter(id=document.id).exists())
+
+
+class CompanyKnowledgeTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="knowledge-user",
+            password="test-password",
+        )
+        self.media_directory = tempfile.TemporaryDirectory()
+        self.settings_override = override_settings(
+            MEDIA_ROOT=self.media_directory.name
+        )
+        self.settings_override.enable()
+        self.addCleanup(self.settings_override.disable)
+        self.addCleanup(self.media_directory.cleanup)
+        self.document = CompanyDocument.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("company-introduction.docx", b"document"),
+            original_name="company-introduction.docx",
+            document_type=CompanyDocument.DocumentType.COMPANY_INTRODUCTION,
+        )
+
+    def test_회사_지식은_출처와_함께_저장된다(self):
+        item = CompanyKnowledgeItem.objects.create(
+            user=self.user,
+            source_document=self.document,
+            category=CompanyKnowledgeItem.Category.CAPABILITY,
+            title="온라인 교육 운영 역량",
+            content="전국 단위 온라인 교육 운영 경험을 보유하고 있습니다.",
+            source_locations=["3페이지"],
+        )
+
+        self.assertEqual(item.source_locations, ["3페이지"])
+
+    def test_원본_문서를_삭제하면_추출한_지식도_삭제된다(self):
+        CompanyKnowledgeItem.objects.create(
+            user=self.user,
+            source_document=self.document,
+            category=CompanyKnowledgeItem.Category.PERFORMANCE,
+            title="교육 운영 실적",
+            content="공공기관 교육을 수행했습니다.",
+        )
+
+        self.document.delete()
+
+        self.assertEqual(CompanyKnowledgeItem.objects.count(), 0)
+
+    @patch(
+        "bids.services.company_knowledge._extract_batch_knowledge"
+    )
+    @patch("bids.services.company_knowledge.extract_document")
+    def test_문서에서_출처가_있는_회사_지식을_추출한다(
+        self,
+        mock_extract,
+        mock_extract_batch,
+    ):
+        from langchain_core.documents import Document
+
+        from bids.services.company_knowledge import (
+            ExtractedKnowledgeBatch,
+            ExtractedKnowledgeItem,
+            prepare_company_knowledge,
+        )
+        from bids.services.rag.extract_document import ExtractionResult
+
+        mock_extract.return_value = ExtractionResult(
+            documents=[
+                Document(
+                    page_content=(
+                        "전국 15개 지점에서 공공기관 온라인 교육을 운영했습니다."
+                    ),
+                    metadata={"location": "3페이지"},
+                )
+            ],
+            processed_files=["company-introduction.docx"],
+        )
+        mock_extract_batch.return_value = ExtractedKnowledgeBatch(
+            items=[
+                ExtractedKnowledgeItem(
+                    category="performance",
+                    title="전국 단위 교육 운영 실적",
+                    content="전국 15개 지점에서 공공기관 교육을 운영했습니다.",
+                    source_numbers=[1],
+                    tags=["교육", "공공기관"],
+                )
+            ]
+        )
+
+        result = prepare_company_knowledge(self.document)
+        item = CompanyKnowledgeItem.objects.get()
+
+        self.assertFalse(result["reused"])
+        self.assertEqual(result["item_count"], 1)
+        self.assertEqual(item.category, "performance")
+        self.assertEqual(item.source_locations, ["3페이지"])
+        self.assertIn("전국 15개 지점", item.evidence_excerpt)
+
+    @patch(
+        "bids.services.company_knowledge._extract_batch_knowledge"
+    )
+    def test_이미_추출한_문서는_OpenAI를_다시_호출하지_않는다(
+        self,
+        mock_extract_batch,
+    ):
+        CompanyKnowledgeItem.objects.create(
+            user=self.user,
+            source_document=self.document,
+            category=CompanyKnowledgeItem.Category.STRENGTH,
+            title="전담 운영 조직",
+            content="전담 운영 조직을 보유하고 있습니다.",
+        )
+        from bids.services.company_knowledge import prepare_company_knowledge
+
+        result = prepare_company_knowledge(self.document)
+
+        self.assertTrue(result["reused"])
+        self.assertEqual(result["item_count"], 1)
+        mock_extract_batch.assert_not_called()
 
 
 class RecommendedBidViewTests(TestCase):
@@ -496,25 +652,6 @@ class RecommendedBidViewTests(TestCase):
         self.assertEqual(response.json()["items"][0]["bidNtceNo"], "REC-001")
         self.assertEqual(profile.preferred_region, "서울")
 
-    def test_회사_희망금액_범위에_맞는_공고만_추천한다(self):
-        profile = self.create_profile("홈페이지")
-        profile.min_bid_amount = 10_000_000
-        profile.max_bid_amount = 100_000_000
-        profile.save(update_fields=["min_bid_amount", "max_bid_amount"])
-        self.create_notice(1, "홈페이지 구축", budget_amount=9_000_000)
-        self.create_notice(2, "홈페이지 구축", budget_amount=10_000_000)
-        self.create_notice(3, "홈페이지 구축", estimated_price=100_000_000)
-        self.create_notice(4, "홈페이지 구축", budget_amount=100_000_001)
-        self.create_notice(5, "홈페이지 구축")
-        self.client.force_login(self.user)
-
-        response = self.client.get("/api/recommended-bids/")
-        data = response.json()
-        notice_numbers = {item["bidNtceNo"] for item in data["items"]}
-
-        self.assertEqual(data["count"], 2)
-        self.assertEqual(notice_numbers, {"REC-002", "REC-003"})
-
     def test_추천_공고는_최대_20건만_반환한다(self):
         self.create_profile("홈페이지")
         for index in range(25):
@@ -559,6 +696,13 @@ class DocumentExtractionTests(TestCase):
 
 
 class BidDocumentSearchTests(TestCase):
+    def test_Chroma_관련도_점수를_0과_1_사이로_제한한다(self):
+        from bids.services.rag.vector_store import normalize_l2_relevance_score
+
+        self.assertEqual(normalize_l2_relevance_score(0), 1)
+        self.assertEqual(normalize_l2_relevance_score(10), 0)
+        self.assertGreater(normalize_l2_relevance_score(0.5), 0)
+
     @patch("bids.services.rag.retriever.get_bid_vector_store")
     def test_관련도_기준을_통과한_chunk를_모두_선택한다(self, mock_get_store):
         documents = [object() for _ in range(10)]
@@ -670,6 +814,96 @@ class BidChatViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["messages"]), 2)
         self.assertEqual(response.json()["messages"][1]["text"], "저장된 답변")
+
+    @patch("bids.views.generate_bid_chat_answer")
+    def test_공고별_질문은_기존_횟수와_관계없이_사용한다(self, mock_generate_answer):
+        mock_generate_answer.return_value = {
+            "answer": "추가 답변",
+            "sources": [{"file_name": "공고문.pdf", "page": "2"}],
+        }
+        saved_bid = SavedBid.objects.create(
+            user=self.user,
+            bid_notice=self.notice,
+        )
+        BidChatMessage.objects.bulk_create(
+            [
+                BidChatMessage(
+                    saved_bid=saved_bid,
+                    role=BidChatMessage.Role.USER,
+                    content=f"질문 {index}",
+                )
+                for index in range(20)
+            ]
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            "/api/bids/CHAT-001/chat/",
+            {"question": "추가 질문"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["answer"], "추가 답변")
+        mock_generate_answer.assert_called_once_with("CHAT-001", "추가 질문")
+
+    def test_proposal_revision_message_is_saved_as_pending(self):
+        saved_bid = SavedBid.objects.create(
+            user=self.user,
+            bid_notice=self.notice,
+        )
+        BidProposal.objects.create(
+            saved_bid=saved_bid,
+            output_format=BidProposal.OutputFormat.PPTX,
+            template_mode="default_template",
+            strategy={},
+            revision_plan={"version": "template_generation_v1"},
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            "/api/bids/CHAT-001/chat/",
+            {"message": "8페이지 수행 전략을 수정해줘"},
+            content_type="application/json",
+        )
+
+        message = BidChatMessage.objects.get(role=BidChatMessage.Role.USER)
+        assistant_message = BidChatMessage.objects.get(
+            role=BidChatMessage.Role.ASSISTANT,
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["intent"], "revision")
+        self.assertEqual(
+            message.message_type,
+            BidChatMessage.MessageType.PROPOSAL,
+        )
+        self.assertEqual(message.status, BidChatMessage.Status.PENDING)
+        self.assertIn("반영할까요", assistant_message.content)
+
+    def test_chat_message_delete_keeps_deleted_placeholder(self):
+        saved_bid = SavedBid.objects.create(
+            user=self.user,
+            bid_notice=self.notice,
+        )
+        message = BidChatMessage.objects.create(
+            saved_bid=saved_bid,
+            role=BidChatMessage.Role.USER,
+            content="삭제할 메시지",
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.delete(
+            f"/api/bids/CHAT-001/chat/{message.id}/"
+        )
+
+        message.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(message.is_deleted)
+        self.assertEqual(message.content, "")
+        self.assertEqual(
+            response.json()["message"]["text"],
+            "삭제된 메시지입니다.",
+        )
 
 
 class BidListViewTests(TestCase):
@@ -867,6 +1101,26 @@ class BidListViewTests(TestCase):
 
         self.assertEqual(early_response.json()["items"][0]["bidNtceNo"], "BID-001")
         self.assertEqual(late_response.json()["items"][0]["bidNtceNo"], "BID-002")
+
+    def test_공고일을_빠른순과_느린순으로_정렬한다(self):
+        self.create_notice(1, notice_date=timezone.localdate() - timedelta(days=2))
+        self.create_notice(2, notice_date=timezone.localdate())
+
+        early_response = self.client.get("/api/bids/?notice_sort=asc")
+        late_response = self.client.get("/api/bids/?notice_sort=desc")
+
+        self.assertEqual(early_response.json()["items"][0]["bidNtceNo"], "BID-001")
+        self.assertEqual(late_response.json()["items"][0]["bidNtceNo"], "BID-002")
+
+    def test_계약방법으로_공고를_필터한다(self):
+        self.create_notice(1, contract_method="제한경쟁")
+        self.create_notice(2, contract_method="수의계약")
+
+        response = self.client.get("/api/bids/?contract_method=수의계약")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+        self.assertEqual(response.json()["items"][0]["bidNtceNo"], "BID-002")
 
 
 class BidSyncViewTests(TestCase):
@@ -1102,7 +1356,7 @@ class RecommendationTests(TestCase):
         self.assertEqual(response.json()["count"], 1)
         self.assertEqual(response.json()["items"][0]["bidNtceNo"], "REC-001")
 
-    def test_마감일이_지난_추천공고는_API_조회시_DB에서_삭제한다(self):
+    def test_마감일이_지난_추천공고는_API에서_제외한다(self):
         self.notice.close_at = timezone.now() - timedelta(minutes=1)
         self.notice.save(update_fields=["close_at"])
         RecommendedBid.objects.create(
@@ -1117,7 +1371,7 @@ class RecommendationTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["count"], 0)
-        self.assertFalse(RecommendedBid.objects.filter(user=self.user).exists())
+        self.assertTrue(RecommendedBid.objects.filter(user=self.user).exists())
 
     def test_마감일이_지난_공고는_추천_매칭에서_다시_만들지_않는다(self):
         self.notice.close_at = timezone.now() - timedelta(minutes=1)
@@ -1389,18 +1643,79 @@ class BidProposalTests(TestCase):
             bid_notice=self.notice,
         )
 
+    @patch("bids.services.proposal_preview.get_template_slide_preview")
+    def test_제안서_템플릿_슬라이드_이미지를_조회한다(self, mock_preview):
+        image_path = Path(self.media_directory.name) / "template-slide.png"
+        image_path.write_bytes(b"template-preview")
+        mock_preview.return_value = (image_path, 30)
+        self.client.force_login(self.user)
+
+        response = self.client.get(
+            "/api/proposal-templates/corporate/slides/1/"
+        )
+        content = b"".join(response.streaming_content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["X-Slide-Count"], "30")
+        self.assertEqual(content, b"template-preview")
+
     def create_source_proposal(self):
+        from io import BytesIO
+
+        from pptx import Presentation
+
+        presentation = Presentation()
+        first_slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+        first_slide.shapes.title.text = "2022년 한국가스공사 제안"
+        first_slide.placeholders[1].text = "기존 사업 수행 전략"
+        second_slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+        second_slide.shapes.title.text = "이전 사업 일정"
+        second_slide.placeholders[1].text = "2022년 1월부터 6월까지 수행"
+        buffer = BytesIO()
+        presentation.save(buffer)
+
         return CompanyDocument.objects.create(
             user=self.user,
             file=SimpleUploadedFile(
-                "previous-proposal.docx",
-                b"previous proposal",
-                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "previous-proposal.pptx",
+                buffer.getvalue(),
+                content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             ),
-            original_name="previous-proposal.docx",
+            original_name="previous-proposal.pptx",
             document_type=CompanyDocument.DocumentType.PROPOSAL,
-            target_company="한국가스공사",
         )
+
+    def test_제안서_만들기를_누르면_프로젝트가_저장된다(self):
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            "/api/saved-bids/PROPOSAL-001/proposal-project/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.saved_bid.refresh_from_db()
+        self.assertIsNotNone(self.saved_bid.proposal_started_at)
+        self.assertTrue(response.json()["hasProposalProject"])
+
+    def test_프로젝트만_삭제하고_저장공고는_유지한다(self):
+        self.client.force_login(self.user)
+        self.saved_bid.proposal_started_at = timezone.now()
+        self.saved_bid.save(update_fields=["proposal_started_at"])
+        BidChatMessage.objects.create(
+            saved_bid=self.saved_bid,
+            role=BidChatMessage.Role.USER,
+            content="제안서 수정 요청",
+        )
+
+        response = self.client.delete(
+            "/api/saved-bids/PROPOSAL-001/proposal-project/"
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.saved_bid.refresh_from_db()
+        self.assertIsNone(self.saved_bid.proposal_started_at)
+        self.assertTrue(SavedBid.objects.filter(id=self.saved_bid.id).exists())
+        self.assertFalse(self.saved_bid.chat_messages.exists())
 
     def test_제안서에_공고기본정보를_전달한다(self):
         from bids.services.rag.proposal import build_bid_notice_context
@@ -1411,40 +1726,539 @@ class BidProposalTests(TestCase):
         self.assertIn("PROPOSAL-001", context)
         self.assertIn("용역", context)
 
-    @patch("bids.services.rag.proposal.extract_document")
-    def test_제안서에_회사소개서_내용을_전달한다(self, mock_extract):
+    @patch("bids.services.rag.proposal.get_bid_vector_store")
+    @patch("bids.services.rag.proposal.search_bid_documents")
+    def test_제안서에는_관련_chunk와_나머지_공고문서도_함께_전달한다(
+        self,
+        mock_search,
+        mock_vector_store,
+    ):
         from langchain_core.documents import Document
 
-        from bids.services.rag.extract_document import ExtractionResult
-        from bids.services.rag.proposal import build_company_introduction_context
+        from bids.services.rag.proposal import collect_proposal_documents
 
-        CompanyDocument.objects.create(
-            user=self.user,
-            file=SimpleUploadedFile(
-                "company-introduction.pdf",
-                b"company introduction",
-                content_type="application/pdf",
+        relevant = Document(
+            page_content="핵심 평가 기준",
+            metadata={
+                "source": "request.pdf",
+                "file_name": "request.pdf",
+                "element_index": 1,
+                "location": "1페이지",
+            },
+        )
+        mock_search.return_value = [relevant]
+        mock_vector_store.return_value.get.return_value = {
+            "documents": [
+                "핵심 평가 기준",
+                "세부 과업 내용",
+                "계약 주의사항",
+            ],
+            "metadatas": [
+                relevant.metadata,
+                {
+                    "source": "request.pdf",
+                    "file_name": "request.pdf",
+                    "element_index": 2,
+                    "location": "2페이지",
+                },
+                {
+                    "source": "notice.hwp",
+                    "file_name": "notice.hwp",
+                    "element_index": 1,
+                    "location": "1문단",
+                },
+            ],
+        }
+
+        documents = collect_proposal_documents("PROPOSAL-001")
+
+        self.assertEqual(documents[0].page_content, "핵심 평가 기준")
+        self.assertEqual(
+            {document.page_content for document in documents},
+            {"핵심 평가 기준", "세부 과업 내용", "계약 주의사항"},
+        )
+
+    def test_PPTX_슬라이드와_텍스트_위치를_읽는다(self):
+        from bids.services.proposal_pptx_renderer import extract_pptx_inventory
+
+        source_proposal = self.create_source_proposal()
+        inventory = extract_pptx_inventory(source_proposal.file.path)
+
+        self.assertEqual(len(inventory), 2)
+        self.assertEqual(inventory[0]["title"], "2022년 한국가스공사 제안")
+        self.assertEqual(inventory[0]["elements"][0]["target"], "shape-0")
+        self.assertEqual(inventory[0]["elements"][0]["kind"], "title")
+        self.assertGreater(inventory[0]["elements"][0]["max_chars"], 0)
+
+    def test_묶음별_작성에도_전체_슬라이드_구성을_전달한다(self):
+        from bids.services.rag.proposal import build_deck_outline
+
+        outline = build_deck_outline(
+            [
+                {"slide_number": 1, "title": "표지", "role": "cover"},
+                {"slide_number": 2, "title": "수행 전략", "role": "content"},
+            ]
+        )
+
+        self.assertIn("1. 표지 (역할: cover)", outline)
+        self.assertIn("2. 수행 전략 (역할: content)", outline)
+
+    def test_생성본의_자리표시자와_빈_슬라이드를_자동_검수한다(self):
+        from io import BytesIO
+
+        from pptx import Presentation
+
+        from bids.services.proposal_pptx_renderer import inspect_proposal_quality
+
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+        slide.shapes.title.text = "[사업명]"
+        slide.placeholders[1].text = "짧은 문구"
+        buffer = BytesIO()
+        presentation.save(buffer)
+
+        result = inspect_proposal_quality(buffer.getvalue())
+
+        self.assertFalse(result["passed"])
+        self.assertEqual(
+            result["unresolved_placeholders"][0]["marker"],
+            "[사업명]",
+        )
+        self.assertEqual(result["empty_slide_numbers"], [1])
+
+    def test_제안서_작성규칙에_업종별_목차가_저장되어있다(self):
+        from bids.services.proposal_rules import (
+            build_proposal_rules_context,
+            load_proposal_rules,
+        )
+
+        rules = load_proposal_rules()
+        context = build_proposal_rules_context()
+
+        self.assertEqual(rules["reference_summary"]["reviewed_slide_count"], 448)
+        self.assertIn("education_service", rules["domain_modules"])
+        self.assertIn("발주처 요구", context)
+
+    def test_텍스트상자_수용량을_크게_넘는_수정은_건너뛴다(self):
+        from io import BytesIO
+
+        from pptx import Presentation
+        from pptx.util import Inches, Pt
+
+        from bids.services.proposal_pptx_renderer import build_proposal_pptx
+
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        textbox = slide.shapes.add_textbox(
+            Inches(1),
+            Inches(1),
+            Inches(1.2),
+            Inches(0.35),
+        )
+        textbox.text_frame.paragraphs[0].text = "기존 문구"
+        textbox.text_frame.paragraphs[0].runs[0].font.size = Pt(20)
+        source = BytesIO()
+        presentation.save(source)
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "source.pptx"
+            source_path.write_bytes(source.getvalue())
+            result = build_proposal_pptx(
+                source_path=source_path,
+                bid_notice=self.notice,
+                revision_plan={
+                    "slide_changes": [
+                        {
+                            "slide_number": 1,
+                            "action": "UPDATE",
+                            "title": "긴 문구 테스트",
+                            "reason": "겹침 방지 확인",
+                            "text_changes": [
+                                {
+                                    "target": "shape-0",
+                                    "original_text": "기존 문구",
+                                    "revised_text": "가" * 500,
+                                    "reason": "긴 문구",
+                                }
+                            ],
+                        }
+                    ],
+                    "added_slides": [],
+                },
+            )
+
+        generated = Presentation(BytesIO(result["file_bytes"]))
+        self.assertEqual(generated.slides[0].shapes[0].text, "기존 문구")
+        self.assertTrue(result["revision_log"][0]["warnings"])
+
+    def test_100장_제안서를_25장씩_4개_묶음으로_나눈다(self):
+        from bids.services.rag.proposal import split_slide_inventory
+
+        inventory = [
+            {
+                "slide_number": number,
+                "title": f"{number}페이지",
+                "elements": [],
+                "role": "content",
+            }
+            for number in range(1, 101)
+        ]
+
+        batches = split_slide_inventory(inventory)
+
+        self.assertEqual([len(batch) for batch in batches], [25, 25, 25, 25])
+        self.assertEqual(batches[0][0]["slide_number"], 1)
+        self.assertEqual(batches[-1][-1]["slide_number"], 100)
+
+    def test_묶음별_개정계획을_전체_제안서_규칙으로_통합한다(self):
+        from bids.services.rag.proposal import (
+            merge_revision_batch_plans,
+            split_slide_inventory,
+        )
+
+        inventory = [
+            {
+                "slide_number": number,
+                "title": f"{number}페이지",
+                "elements": [],
+                "role": "content",
+            }
+            for number in range(1, 101)
+        ]
+        batch_reviews = []
+        for batch in split_slide_inventory(inventory):
+            start_slide = batch[0]["slide_number"]
+            batch_reviews.append(
+                {
+                    "inventory": batch,
+                    "plan": {
+                        "summary": f"{start_slide}페이지부터 검토",
+                        "slide_changes": [
+                            {
+                                "slide_number": start_slide,
+                                "action": "REMOVE",
+                                "title": f"{start_slide}페이지",
+                                "reason": "현재 공고와 무관",
+                                "text_changes": [],
+                                "source_numbers": [],
+                            },
+                            {
+                                "slide_number": start_slide + 1,
+                                "action": "REMOVE",
+                                "title": f"{start_slide + 1}페이지",
+                                "reason": "현재 공고와 무관",
+                                "text_changes": [],
+                                "source_numbers": [],
+                            },
+                        ],
+                        "added_slides": [
+                            {
+                                "after_slide_number": start_slide,
+                                "template_slide_number": start_slide + 1,
+                                "title": f"추가 전략 {start_slide}-{index}",
+                                "reason": "공고 전략 보강",
+                                "text_changes": [],
+                                "source_numbers": [],
+                            }
+                            for index in range(6)
+                        ],
+                        "final_review_items": [f"{start_slide}페이지 확인"],
+                    },
+                }
+            )
+
+        merged = merge_revision_batch_plans(batch_reviews)
+
+        self.assertEqual(len(merged["review_batches"]), 4)
+        self.assertEqual(
+            sum(
+                batch["reviewed_slide_count"]
+                for batch in merged["review_batches"]
             ),
-            original_name="company-introduction.pdf",
+            100,
+        )
+        self.assertEqual(
+            [
+                change["action"]
+                for change in merged["slide_changes"]
+            ].count("REMOVE"),
+            3,
+        )
+        self.assertEqual(len(merged["added_slides"]), 20)
+
+    @patch("bids.services.rag.proposal.build_revision_chain")
+    def test_100장_제안서는_AI_검토를_4번_순차_실행한다(
+        self,
+        mock_build_revision_chain,
+    ):
+        from bids.services.rag.proposal import build_revision_plan_in_batches
+
+        class FakeRevisionResult:
+            def model_dump(self):
+                return {
+                    "summary": "묶음 검토 완료",
+                    "slide_changes": [],
+                    "added_slides": [],
+                    "final_review_items": [],
+                }
+
+        inventory = [
+            {
+                "slide_number": number,
+                "title": f"{number}페이지",
+                "elements": [],
+                "role": "content",
+            }
+            for number in range(1, 101)
+        ]
+        revision_chain = mock_build_revision_chain.return_value
+        revision_chain.invoke.side_effect = [
+            FakeRevisionResult()
+            for _ in range(4)
+        ]
+
+        result = build_revision_plan_in_batches(
+            inventory,
+            {
+                "company_context": "회사 정보",
+                "bid_notice_context": "공고 기본정보",
+                "bid_context": "공고 문서",
+                "strategy_context": "수주 전략",
+                "source_proposal_context": "기존 제안서",
+                "allowed_template_numbers": "2, 3",
+            },
+        )
+
+        self.assertEqual(revision_chain.invoke.call_count, 4)
+        self.assertIn(
+            "1~25페이지",
+            revision_chain.invoke.call_args_list[0].args[0]["batch_scope"],
+        )
+        self.assertIn(
+            "76~100페이지",
+            revision_chain.invoke.call_args_list[-1].args[0]["batch_scope"],
+        )
+        self.assertEqual(len(result["review_batches"]), 4)
+
+    def test_원본_PPTX를_수정_삭제_추가하고_메모를_남긴다(self):
+        from io import BytesIO
+
+        from pptx import Presentation
+
+        from bids.services.proposal_pptx_renderer import build_proposal_pptx
+
+        source_proposal = self.create_source_proposal()
+        result = build_proposal_pptx(
+            source_path=source_proposal.file.path,
+            bid_notice=self.notice,
+            revision_plan={
+                "slide_changes": [
+                    {
+                        "slide_number": 1,
+                        "action": "UPDATE",
+                        "title": "표지",
+                        "reason": "새 사업명 반영",
+                        "text_changes": [
+                            {
+                                "target": "shape-0",
+                                "original_text": "2022년 한국가스공사 제안",
+                                "revised_text": "정보시스템 구축 제안",
+                                "reason": "사업명 변경",
+                            }
+                        ],
+                    },
+                    {
+                        "slide_number": 2,
+                        "action": "REMOVE",
+                        "title": "이전 사업 일정",
+                        "reason": "현재 공고와 무관",
+                        "text_changes": [],
+                    },
+                ],
+                "added_slides": [
+                    {
+                        "after_slide_number": 1,
+                        "template_slide_number": 2,
+                        "title": "신규 수행 전략",
+                        "reason": "공고 요구사항 보강",
+                        "text_changes": [
+                            {
+                                "target": "shape-0",
+                                "content_label": "슬라이드 제목",
+                                "original_text": "이전 사업 일정",
+                                "revised_text": "신규 수행 전략",
+                                "reason": "추가 슬라이드 제목",
+                            },
+                            {
+                                "target": "shape-1",
+                                "content_label": "수행 내용",
+                                "original_text": "2022년 1월부터 6월까지 수행",
+                                "revised_text": "새 공고 일정에 맞춘 수행 계획",
+                                "reason": "현재 사업 일정 반영",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+
+        generated = Presentation(BytesIO(result["file_bytes"]))
+        self.assertEqual(len(generated.slides), 2)
+        self.assertEqual(generated.slides[0].shapes.title.text, "정보시스템 구축 제안")
+        self.assertEqual(generated.slides[1].shapes.title.text, "신규 수행 전략")
+        self.assertIn("AI 제안서 개정 메모", generated.slides[0].notes_slide.notes_text_frame.text)
+        self.assertIn(
+            "UPDATE",
+            [entry["action"] for entry in result["revision_log"]],
+        )
+
+    def test_표지_복제와_대량_슬라이드_삭제를_차단한다(self):
+        from io import BytesIO
+
+        from pptx import Presentation
+
+        from bids.services.proposal_pptx_renderer import build_proposal_pptx
+
+        presentation = Presentation()
+        for index in range(1, 7):
+            slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+            slide.shapes.title.text = f"{index}페이지 제목"
+            slide.placeholders[1].text = f"{index}페이지 본문"
+        source = BytesIO()
+        presentation.save(source)
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "source.pptx"
+            source_path.write_bytes(source.getvalue())
+            result = build_proposal_pptx(
+                source_path=source_path,
+                bid_notice=self.notice,
+                revision_plan={
+                    "slide_changes": [
+                        {
+                            "slide_number": index,
+                            "action": "REMOVE",
+                            "title": f"{index}페이지",
+                            "reason": "삭제 요청",
+                            "text_changes": [],
+                        }
+                        for index in range(1, 7)
+                    ],
+                    "added_slides": [
+                        {
+                            "after_slide_number": 1,
+                            "template_slide_number": 1,
+                            "title": "표지 복제",
+                            "reason": "잘못된 추가 요청",
+                            "text_changes": [
+                                {
+                                    "target": "shape-0",
+                                    "original_text": "1페이지 제목",
+                                    "revised_text": "복제 제목",
+                                    "reason": "제목 수정",
+                                },
+                                {
+                                    "target": "shape-1",
+                                    "original_text": "1페이지 본문",
+                                    "revised_text": "복제 본문",
+                                    "reason": "본문 수정",
+                                },
+                            ],
+                        }
+                    ],
+                },
+            )
+
+        generated = Presentation(BytesIO(result["file_bytes"]))
+        self.assertEqual(len(generated.slides), 3)
+        self.assertEqual(generated.slides[0].shapes.title.text, "1페이지 제목")
+        self.assertNotIn(
+            "ADD",
+            [entry["action"] for entry in result["revision_log"]],
+        )
+        self.assertEqual(
+            [entry["action"] for entry in result["revision_log"]].count("REMOVE"),
+            3,
+        )
+
+    def test_같은_본문_디자인으로_최대_20장을_추가한다(self):
+        from io import BytesIO
+
+        from pptx import Presentation
+
+        from bids.services.proposal_pptx_renderer import build_proposal_pptx
+
+        source_proposal = self.create_source_proposal()
+        additions = []
+        for index in range(1, 22):
+            additions.append(
+                {
+                    "after_slide_number": 2,
+                    "template_slide_number": 2,
+                    "title": f"추가 전략 {index}",
+                    "reason": "공고 맞춤 전략 보강",
+                    "text_changes": [
+                        {
+                            "target": "shape-0",
+                            "original_text": "이전 사업 일정",
+                            "revised_text": f"추가 전략 {index}",
+                            "reason": "제목 변경",
+                        },
+                        {
+                            "target": "shape-1",
+                            "original_text": "2022년 1월부터 6월까지 수행",
+                            "revised_text": f"새 공고 수행 방안 {index}",
+                            "reason": "본문 변경",
+                        },
+                    ],
+                }
+            )
+
+        result = build_proposal_pptx(
+            source_path=source_proposal.file.path,
+            bid_notice=self.notice,
+            revision_plan={
+                "slide_changes": [],
+                "added_slides": additions,
+            },
+        )
+
+        generated = Presentation(BytesIO(result["file_bytes"]))
+        self.assertEqual(len(generated.slides), 22)
+        self.assertEqual(
+            [entry["action"] for entry in result["revision_log"]].count("ADD"),
+            20,
+        )
+
+    @patch("bids.services.company_knowledge.prepare_user_company_knowledge")
+    def test_제안서에_자동_추출한_회사_지식을_전달한다(self, mock_prepare):
+        from bids.services.company_knowledge import build_company_knowledge_context
+
+        source_document = CompanyDocument.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("company-introduction.pptx", b"document"),
+            original_name="company-introduction.pptx",
             document_type=CompanyDocument.DocumentType.COMPANY_INTRODUCTION,
         )
-        mock_extract.return_value = ExtractionResult(
-            documents=[
-                Document(
-                    page_content="공공 정보시스템 구축과 운영 경험을 보유하고 있습니다.",
-                    metadata={"location": "1페이지"},
-                )
-            ],
-            processed_files=["company-introduction.pdf"],
+        CompanyKnowledgeItem.objects.create(
+            user=self.user,
+            source_document=source_document,
+            category=CompanyKnowledgeItem.Category.CAPABILITY,
+            title="공공 정보시스템 운영 역량",
+            content="공공 정보시스템 구축과 운영 경험을 보유하고 있습니다.",
+            source_locations=["1페이지"],
         )
+        mock_prepare.return_value = {
+            "item_count": 1,
+            "processed_files": [],
+            "reused_files": ["company-introduction.pptx"],
+            "failed_files": [],
+        }
 
-        context, processed_files, failed_files = (
-            build_company_introduction_context(self.user)
-        )
+        context, processing = build_company_knowledge_context(self.user)
 
         self.assertIn("공공 정보시스템 구축과 운영 경험", context)
-        self.assertEqual(processed_files, ["company-introduction.pdf"])
-        self.assertEqual(failed_files, [])
+        self.assertEqual(processing["item_count"], 1)
 
     def test_제안서에_사업자등록_기본정보를_전달한다(self):
         from bids.services.rag.analysis import company_context
@@ -1455,90 +2269,115 @@ class BidProposalTests(TestCase):
         self.assertIn("333-44-55555", context)
         self.assertIn("박대표", context)
 
-    def test_기존_제안서가_없으면_생성할_수_없다(self):
-        self.client.force_login(self.user)
-
-        response = self.client.post(
-            "/api/bids/PROPOSAL-001/proposal/",
-            {"source_document_id": 1, "output_format": "docx"},
-            content_type="application/json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("기존 제안서", response.json()["error"])
-
-    def test_HWP_제안서는_Word_형식으로만_생성한다(self):
-        source_proposal = CompanyDocument.objects.create(
-            user=self.user,
-            file=SimpleUploadedFile("previous-proposal.hwp", b"hwp"),
-            original_name="previous-proposal.hwp",
-            document_type=CompanyDocument.DocumentType.PROPOSAL,
-        )
+    @patch("bids.services.rag.proposal.create_bid_proposal_from_template")
+    def test_Bid2_템플릿으로_새_제안서를_생성한다(self, mock_create):
+        mock_create.return_value = {
+            "strategy": {"win_themes": ["공고 맞춤 전략"]},
+            "revision_plan": {
+                "version": "template_generation_v1",
+                "summary": "Bid2 템플릿으로 작성했습니다.",
+                "revision_log": [],
+            },
+            "template_mode": "default_template",
+            "filename": "proposal-PROPOSAL-001.pptx",
+            "file_bytes": b"generated proposal",
+            "content_type": (
+                "application/vnd.openxmlformats-officedocument."
+                "presentationml.presentation"
+            ),
+        }
         self.client.force_login(self.user)
 
         response = self.client.post(
             "/api/bids/PROPOSAL-001/proposal/",
             {
-                "source_document_id": source_proposal.id,
-                "output_format": "pptx",
+                "generation_mode": "default_template",
+                "template_id": "public",
             },
+            content_type="application/json",
+        )
+
+        proposal = BidProposal.objects.get(saved_bid=self.saved_bid)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(proposal.template_mode, "default_template")
+        self.assertEqual(proposal.revision_plan["template_id"], "public")
+        mock_create.assert_called_once()
+
+    def test_선택할_수_있는_제안서_템플릿을_조회한다(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get("/api/bids/PROPOSAL-001/proposal/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["selected_template_id"], "public")
+        self.assertEqual(
+            [item["id"] for item in response.json()["templates"]],
+            ["corporate", "modern", "public"],
+        )
+
+    def test_제안서를_삭제하면_PDF_미리보기_캐시도_삭제한다(self):
+        from bids.services.proposal_preview import get_proposal_preview_path
+
+        proposal = BidProposal(
+            saved_bid=self.saved_bid,
+            output_format=BidProposal.OutputFormat.PPTX,
+            template_mode="default_template",
+        )
+        proposal.generated_file.save(
+            "proposal.pptx",
+            SimpleUploadedFile("proposal.pptx", b"proposal"),
+        )
+        preview_path = get_proposal_preview_path(proposal)
+        preview_path.write_bytes(b"%PDF-preview")
+
+        proposal.delete()
+
+        self.assertFalse(preview_path.exists())
+
+    def test_legacy_source_revision_is_not_exposed_as_current_proposal(self):
+        BidProposal.objects.create(
+            saved_bid=self.saved_bid,
+            output_format=BidProposal.OutputFormat.PPTX,
+            template_mode="source_revision",
+            strategy={},
+            revision_plan={
+                "version": "pptx_revision_v3",
+                "output_slide_count": 98,
+            },
+        )
+        self.client.force_login(self.user)
+
+        proposal_response = self.client.get(
+            "/api/bids/PROPOSAL-001/proposal/"
+        )
+        saved_bids_response = self.client.get("/api/saved-bids/")
+
+        self.assertEqual(proposal_response.status_code, 200)
+        self.assertIsNone(proposal_response.json()["proposal"])
+        self.assertFalse(saved_bids_response.json()["items"][0]["hasProposal"])
+
+    def test_기존_PPT_수정_방식은_사용할_수_없다(self):
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            "/api/bids/PROPOSAL-001/proposal/",
+            {"generation_mode": "existing", "source_document_id": 1},
             content_type="application/json",
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Word", response.json()["error"])
-
-    @patch("bids.services.rag.proposal.generate_bid_proposal")
-    def test_제안서는_한번_생성한_결과를_재사용한다(self, mock_generate):
-        source_proposal = self.create_source_proposal()
-        mock_generate.return_value = {
-            "strategy": {"win_themes": ["안정적인 구축"]},
-            "draft": {
-                "proposal_title": "맞춤형 제안서",
-                "subtitle": "정보시스템 구축",
-                "executive_summary": "사업 요구사항에 맞춘 제안입니다.",
-                "sections": [],
-                "final_checklist": [],
-            },
-            "template_mode": "original_theme",
-            "filename": "proposal-PROPOSAL-001.docx",
-            "file_bytes": b"generated proposal",
-            "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        }
-        self.client.force_login(self.user)
-        request_data = {
-            "source_document_id": source_proposal.id,
-            "output_format": "docx",
-        }
-
-        first = self.client.post(
-            "/api/bids/PROPOSAL-001/proposal/",
-            request_data,
-            content_type="application/json",
-        )
-        second = self.client.post(
-            "/api/bids/PROPOSAL-001/proposal/",
-            request_data,
-            content_type="application/json",
-        )
-
-        self.assertEqual(first.status_code, 201)
-        self.assertEqual(second.status_code, 200)
-        self.assertEqual(mock_generate.call_count, 1)
-        self.assertEqual(BidProposal.objects.count(), 1)
+        self.assertIn("등록된 제안서 템플릿", response.json()["error"])
 
     def test_저장된_제안서_파일을_내려받는다(self):
-        source_proposal = self.create_source_proposal()
         proposal = BidProposal.objects.create(
             saved_bid=self.saved_bid,
-            source_document=source_proposal,
-            output_format=BidProposal.OutputFormat.DOCX,
+            output_format=BidProposal.OutputFormat.PPTX,
             strategy={},
-            draft={},
+            revision_plan={},
         )
         proposal.generated_file.save(
-            "proposal-PROPOSAL-001.docx",
-            SimpleUploadedFile("proposal.docx", b"generated proposal"),
+            "revised-proposal-PROPOSAL-001.pptx",
+            SimpleUploadedFile("proposal.pptx", b"generated proposal"),
         )
         self.client.force_login(self.user)
 
@@ -1549,3 +2388,97 @@ class BidProposalTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(content, b"generated proposal")
+
+    @patch("bids.services.rag.proposal.revise_proposal_with_feedback")
+    def test_미리보기_수정요청을_초안에_저장한다(self, mock_feedback):
+        proposal = BidProposal.objects.create(
+            saved_bid=self.saved_bid,
+            output_format=BidProposal.OutputFormat.PPTX,
+            template_mode="default_template",
+            strategy={"win_themes": ["안정적인 구축"]},
+            revision_plan={
+                "version": "template_generation_v1",
+                "status": "draft",
+                "revision_log": [],
+                "feedback_history": [],
+                "source_slide_count": 2,
+                "output_slide_count": 2,
+            },
+        )
+        proposal.generated_file.save(
+            "draft.pptx",
+            SimpleUploadedFile("draft.pptx", b"draft"),
+        )
+        mock_feedback.return_value = {
+            "revision_plan": {
+                "summary": "8페이지 수행 전략을 구체화했습니다.",
+                "final_review_items": [],
+            },
+            "filename": "feedback.pptx",
+            "file_bytes": b"feedback",
+            "output_slide_count": 2,
+            "revision_log": [
+                {
+                    "source_slide_number": 8,
+                    "output_slide_number": 8,
+                    "action": "UPDATE",
+                    "title": "수행 전략",
+                    "reason": "사용자 요청 반영",
+                    "changes": [],
+                    "warnings": [],
+                }
+            ],
+        }
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            "/api/bids/PROPOSAL-001/proposal/feedback/",
+            {
+                "instruction": "8페이지 수행 전략을 더 구체적으로 수정해 주세요.",
+                "slide_number": 8,
+            },
+            content_type="application/json",
+        )
+
+        proposal.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(proposal.revision_plan["status"], "draft")
+        self.assertEqual(len(proposal.revision_plan["feedback_history"]), 1)
+        self.assertEqual(
+            proposal.revision_plan["feedback_history"][0]["slide_number"],
+            8,
+        )
+
+    def test_초안은_확정한_뒤에만_내려받는다(self):
+        proposal = BidProposal.objects.create(
+            saved_bid=self.saved_bid,
+            output_format=BidProposal.OutputFormat.PPTX,
+            template_mode="default_template",
+            strategy={},
+            revision_plan={
+                "version": "template_generation_v1",
+                "status": "draft",
+            },
+        )
+        proposal.generated_file.save(
+            "draft.pptx",
+            SimpleUploadedFile("draft.pptx", b"draft proposal"),
+        )
+        self.client.force_login(self.user)
+
+        blocked = self.client.get(
+            "/api/bids/PROPOSAL-001/proposal/download/"
+        )
+        finalized = self.client.post(
+            "/api/bids/PROPOSAL-001/proposal/finalize/"
+        )
+        downloaded = self.client.get(
+            "/api/bids/PROPOSAL-001/proposal/download/"
+        )
+        content = b"".join(downloaded.streaming_content)
+
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(finalized.status_code, 200)
+        self.assertEqual(finalized.json()["proposal"]["status"], "final")
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertEqual(content, b"draft proposal")

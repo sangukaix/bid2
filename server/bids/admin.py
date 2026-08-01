@@ -1,6 +1,16 @@
 from django.contrib import admin
 
-from .models import BidAnalysis, BidChatMessage, BidNotice, BidProposal, CompanyDocument, CompanyProfile, RecommendedBid, SavedBid
+from .models import (
+    BidAnalysis,
+    BidChatMessage,
+    BidNotice,
+    BidProposal,
+    CompanyDocument,
+    CompanyKnowledgeItem,
+    CompanyProfile,
+    RecommendedBid,
+    SavedBid,
+)
 
 
 @admin.register(CompanyProfile)
@@ -26,10 +36,40 @@ class CompanyProfileAdmin(admin.ModelAdmin):
 
 @admin.register(CompanyDocument)
 class CompanyDocumentAdmin(admin.ModelAdmin):
-    list_display = ("original_name", "user", "document_type", "target_company", "uploaded_at")
+    list_display = ("original_name", "user", "document_type", "uploaded_at")
     list_filter = ("document_type", "uploaded_at")
-    search_fields = ("original_name", "target_company", "user__username")
+    search_fields = ("original_name", "user__username")
     readonly_fields = ("uploaded_at",)
+
+
+@admin.register(CompanyKnowledgeItem)
+class CompanyKnowledgeItemAdmin(admin.ModelAdmin):
+    list_display = (
+        "title",
+        "category",
+        "source_document",
+        "user",
+        "updated_at",
+    )
+    list_filter = ("category", "updated_at")
+    search_fields = (
+        "title",
+        "content",
+        "source_document__original_name",
+        "user__username",
+    )
+    readonly_fields = (
+        "user",
+        "source_document",
+        "category",
+        "title",
+        "content",
+        "source_locations",
+        "evidence_excerpt",
+        "tags",
+        "created_at",
+        "updated_at",
+    )
 
 
 @admin.register(BidNotice)
@@ -106,16 +146,15 @@ class BidChatMessageAdmin(admin.ModelAdmin):
 
 @admin.register(BidProposal)
 class BidProposalAdmin(admin.ModelAdmin):
-    list_display = ("saved_bid", "source_document", "output_format", "created_at", "updated_at")
+    list_display = ("saved_bid", "output_format", "created_at", "updated_at")
     search_fields = ("saved_bid__user__username", "saved_bid__bid_notice__bid_ntce_no")
     list_filter = ("output_format", "template_mode", "created_at")
     readonly_fields = (
         "saved_bid",
-        "source_document",
         "output_format",
         "template_mode",
         "strategy",
-        "draft",
+        "revision_plan",
         "generated_file",
         "created_at",
         "updated_at",

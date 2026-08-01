@@ -3,16 +3,22 @@ from django.urls import path # URL주소 등록하는 장고 기능 가지고 �
 from .import views # 같은 bids 폴더의 views.py를 가져오기
 
 urlpatterns = [
+    path("proposal-templates/<str:template_id>/slides/<int:slide_number>/", views.proposal_template_slide_preview), #제안서 템플릿 슬라이드 이미지
     path("bids/", views.bid_list), #bids 주소로 요청하면 bid_list 함수 실행
     path("bids/sync/", views.sync_bid_notices), #나라장터 공고를 현재 시점으로 다시 수집
     path("bids/<str:bid_ntce_no>/chat/", views.bid_chat), #공고별 AI 질문과 답변
+    path("bids/<str:bid_ntce_no>/chat/<int:message_id>/", views.bid_chat_message_delete), #대화 내용 삭제 표시
     path("bids/<str:bid_ntce_no>/analysis/", views.bid_analysis), #공고별 AI 분석 생성과 조회
     path("bids/<str:bid_ntce_no>/analysis/pdf/", views.bid_analysis_pdf), #저장된 분석 PDF 내려받기
     path("bids/<str:bid_ntce_no>/proposal/", views.bid_proposal), #공고별 제안서 생성과 조회
+    path("bids/<str:bid_ntce_no>/proposal/preview/", views.bid_proposal_preview), #현재 제안서 PDF 미리보기
+    path("bids/<str:bid_ntce_no>/proposal/feedback/", views.bid_proposal_feedback), #미리보기 채팅 수정
+    path("bids/<str:bid_ntce_no>/proposal/finalize/", views.bid_proposal_finalize), #검토한 제안서를 최종본으로 확정
     path("bids/<str:bid_ntce_no>/proposal/download/", views.bid_proposal_download), #생성 제안서 내려받기
     path("bids/<str:bid_ntce_no>/", views.bid_detail), #공고번호에 해당하는 공고 한 건 조회
     path("saved-bids/", views.saved_bid_list), #내 저장 공고 조회와 새 공고 저장
     path("saved-bids/<str:bid_ntce_no>/", views.saved_bid_delete), #공고번호로 저장 취소
+    path("saved-bids/<str:bid_ntce_no>/proposal-project/", views.start_bid_proposal_project), #제안서 프로젝트 시작
     path("recommended-bids/", views.recommended_bid_list), #기존 주소 호환용, 화면에서는 사용하지 않음
     path("recommendations/", views.stored_recommendation_list), #매일 저장된 회원별 추천 공고
     path("company-profile/", views.company_profile), #회사 프로필 조회와 최초 저장

@@ -1,3 +1,4 @@
+from math import sqrt
 from pathlib import Path  # 파일과 폴더 경로를 다루는 Python 도구
 
 from django.conf import settings  # Django의 BASE_DIR 설정 가져오기
@@ -6,6 +7,13 @@ from langchain_openai import OpenAIEmbeddings  # 텍스트를 숫자 벡터로 �
 
 
 EMBEDDING_MODEL = "text-embedding-3-small"  # 비용이 낮은 OpenAI Embedding 모델
+
+
+def normalize_l2_relevance_score(distance):
+    """Chroma의 L2 거리를 경고가 없는 0~1 관련도 점수로 바꿉니다."""
+
+    score = 1 - (distance / sqrt(2))
+    return max(0.0, min(1.0, score))
 
 
 def get_bid_db_path(bid_ntce_no):  # 공고별 Chroma 저장 경로를 안전하게 만드는 함수
@@ -36,6 +44,7 @@ def create_or_load_vector_store(bid_ntce_no, chunks):  # 공고번호와 Chunk �
             collection_name=collection_name,  # 기존 공고 컬렉션 선택
             persist_directory=str(db_path),  # 기존 Chroma 저장 폴더 연결
             embedding_function=embeddings,  # 질문도 같은 모델로 Embedding
+            relevance_score_fn=normalize_l2_relevance_score,
         )
 
         if vector_store._collection.count() > 0:  # 저장된 Chunk가 있는지 확인
@@ -49,6 +58,7 @@ def create_or_load_vector_store(bid_ntce_no, chunks):  # 공고번호와 Chunk �
         embedding=embeddings,  # Chunk를 벡터로 변환할 도구
         collection_name=collection_name,  # 공고별 Chroma 컬렉션 이름
         persist_directory=str(db_path),  # 벡터 DB를 영구 저장할 위치
+        relevance_score_fn=normalize_l2_relevance_score,
     )  # 처음 실행될 때만 OpenAI Embedding 비용 발생
 
     return vector_store  # Retriever에서 사용할 Chroma 객체 반환

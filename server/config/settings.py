@@ -85,6 +85,9 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
+        "OPTIONS": {
+            "timeout": 30,  # 자동 수집과 AI 결과 저장이 겹치면 잠금이 풀릴 때까지 기다림
+        },
     }
 }
 
@@ -127,6 +130,30 @@ STATIC_URL = "static/"
 
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"  # 나라장터에서 내려받은 첨부파일 저장 위치
+PROPOSAL_DEFAULT_TEMPLATE_ID = "public"
+PROPOSAL_TEMPLATES = {  # 웹에서 고를 수 있는 제안서 디자인과 실제 파일을 연결
+    "corporate": {
+        "name": "코퍼레이트 블루",
+        "description": "공공기관 제안에 어울리는 안정적인 기본형",
+        "path": BASE_DIR / "proposal_templates" / "default.pptx",
+        "target_slides": 30,
+    },
+    "modern": {
+        "name": "모던 네이비",
+        "description": "여백과 대비를 강조한 간결한 전문형",
+        "path": BASE_DIR / "proposal_templates" / "modern.pptx",
+        "target_slides": 30,
+    },
+    "public": {
+        "name": "공공입찰 실무형",
+        "description": "요구사항·평가항목·수행체계가 선명한 공공 제안형",
+        "path": BASE_DIR / "proposal_templates" / "public_standard.pptx",
+        "target_slides": 30,
+    },
+}
+PROPOSAL_DEFAULT_TEMPLATE_PATH = PROPOSAL_TEMPLATES[
+    PROPOSAL_DEFAULT_TEMPLATE_ID
+]["path"]  # 기존 코드와 테스트에서 사용하는 기본 템플릿 경로
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
