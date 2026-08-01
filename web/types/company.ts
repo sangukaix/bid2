@@ -22,8 +22,6 @@ export type CompanyProfileData = {
   excluded_keywords: string;
   preferred_bid_type: string;
   preferred_region: string;
-  min_bid_amount: number | null;
-  max_bid_amount: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -32,6 +30,5 @@ export type CompanyDocumentData = {
   id: number;
   original_name: string;
   document_type: "proposal" | "company_introduction";
-  target_company: string;
   uploaded_at: string;
 };

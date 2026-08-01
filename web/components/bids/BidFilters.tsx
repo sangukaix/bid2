@@ -26,6 +26,7 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
   const [regions, setRegions] = useState(() => parseRegions(filters.regions ?? ""));
   const [savedKeywords, setSavedKeywords] = useState<string[]>([]); // 회사 정보에 저장된 원래 키워드
   const [savedRegions, setSavedRegions] = useState<string[]>([]); // 회사 정보에 저장된 원래 희망지역
+  const [savedBusinessType, setSavedBusinessType] = useState(""); // 회사 정보에 저장된 공고 유형
   const [keywordInput, setKeywordInput] = useState("");
   const [syncState, setSyncState] = useState(getBidSyncState); // 페이지를 이동해도 유지되는 나라장터 업데이트 상태
   const [syncAuthError, setSyncAuthError] = useState("");
@@ -45,23 +46,35 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
 
       const companyKeywords = getCompanyKeywords(data.profile);
       const companyRegions = parseRegions(data.profile.preferred_region);
+      const companyBusinessType = {
+        service: "용역",
+        goods: "물품",
+        construction: "공사",
+      }[data.profile.preferred_bid_type] ?? "";
       const params = new URLSearchParams();
 
       setSavedKeywords(companyKeywords);
       setSavedRegions(companyRegions);
+      setSavedBusinessType(companyBusinessType);
 
-      if (filters.keywords !== undefined || filters.regions !== undefined) return;
+      if (
+        filters.keywords !== undefined ||
+        filters.regions !== undefined ||
+        filters.business_type !== undefined
+      ) return;
 
       setKeywords(companyKeywords);
       setRegions(companyRegions);
+      setBusinessType(companyBusinessType);
       params.set("keywords", companyKeywords.join(","));
       params.set("regions", companyRegions.join(","));
+      if (companyBusinessType) params.set("business_type", companyBusinessType);
       router.replace(`/dashBoard/bidList?${params}`); // 회사 조건으로 첫 검색 실행
 
     }
 
     loadCompanyConditions(); // 최초 진입 시 회사 정보의 검색 조건 불러오기
-  }, [filters.keywords, filters.regions, router]);
+  }, [filters.business_type, filters.keywords, filters.regions, router]);
 
   useEffect(() => {
     let previousStatus = getBidSyncState().status;
@@ -118,24 +131,27 @@ export default function BidFilters({ filters, lastUpdatedAt }: BidFiltersProps) 
     }
     if (businessType) params.set("business_type", businessType);
     if (filters.deadline_sort) params.set("deadline_sort", filters.deadline_sort);
+    if (filters.notice_sort) params.set("notice_sort", filters.notice_sort);
+    if (filters.contract_method) params.set("contract_method", filters.contract_method);
 
     router.push(`/dashBoard/bidList${params.size ? `?${params}` : ""}`);
   }
 
   function resetFilters() {
     setQuery("");
-    setBusinessType("");
-    setKeywords([]);
-    setRegions([]);
+    setBusinessType(savedBusinessType);
+    setKeywords(savedKeywords);
+    setRegions(savedRegions);
     setKeywordInput("");
     setSyncAuthError("");
 
     const params = new URLSearchParams({
-      keywords: "",
-      regions: "",
-    }); // 빈 조건을 URL에 남겨 회사의 저장 조건이 자동으로 다시 들어오지 않게 함
+      keywords: savedKeywords.join(","),
+      regions: savedRegions.join(","),
+    });
+    if (savedBusinessType) params.set("business_type", savedBusinessType);
 
-    router.push(`/dashBoard/bidList?${params}`); // 필터 없는 상태로 전체 공고를 즉시 다시 조회
+    router.push(`/dashBoard/bidList?${params}`); // 회사에 저장된 최초 조건으로 다시 조회
   }
 
   function refreshBidNotices() {

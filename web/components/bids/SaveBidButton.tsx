@@ -69,7 +69,7 @@ export default function SaveBidButton({ bidNtceNo }: SaveBidButtonProps) {
         className={buttonClassName}
         disabled={saveState === "saving" || saveState === "saved"}
         onClick={handleSave}
-        title={errorMessage || "이 공고를 내 저장 공고에 추가"}
+        title={errorMessage || "이 공고를 내가 저장한 공고에 추가"}
         type="button"
       >
         {saveState === "idle" ? <><span>공고</span><span>저장</span></> : null}

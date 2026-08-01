@@ -30,7 +30,7 @@ type InfoItemProps = {
 
 function InfoItem({ label, value }: InfoItemProps) {
   return (
-    <div className="min-w-0">
+    <div className="min-w-0 border-l-2 border-slate-200 pl-3">
       <dt className="text-xs font-semibold text-slate-500">{label}</dt>
       <dd className="mt-1 truncate text-sm font-medium text-slate-900">{value || "-"}</dd>
     </div>
@@ -85,10 +85,11 @@ function DescriptionBlock({ title, value }: { title: string; value: string }) {
   );
 }
 
-function TagList({ items, color }: { items: string[]; color: "blue" | "green" | "slate" }) {
+function TagList({ items, color }: { items: string[]; color: "blue" | "green" | "red" | "slate" }) {
   const colorClass = {
     blue: "bg-blue-50 text-blue-700",
     green: "bg-emerald-50 text-emerald-700",
+    red: "bg-red-50 text-red-700",
     slate: "bg-slate-100 text-slate-600",
   }[color];
 
@@ -183,13 +184,20 @@ export default function CompanyProfile() {
   const performances = parseStructuredRows(profile.past_performance);
 
   return (
-    <div className="mt-6 max-w-5xl space-y-5">
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+    <div className="mt-6 max-w-6xl space-y-5">
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="flex flex-wrap items-start justify-between gap-5 border-b border-slate-200 px-6 py-6">
           <div>
-            <p className="text-xs font-semibold text-blue-600">회사 프로필</p>
+            <p className="text-xs font-semibold text-blue-600">회사 정보</p>
             <h2 className="mt-1 text-xl font-bold text-slate-950">{profile.company_name}</h2>
-            <p className="mt-1 text-sm text-slate-500">{profile.industry || "사업 분야 미등록"}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                {companyTypeLabels[profile.company_type] ?? "회사 구분 미등록"}
+              </span>
+              <span className="rounded-md bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                {profile.industry || "사업 분야 미등록"}
+              </span>
+            </div>
           </div>
           <button
             className="cursor-pointer rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
@@ -199,7 +207,7 @@ export default function CompanyProfile() {
             회사정보 수정
           </button>
         </div>
-        <dl className="grid gap-x-6 gap-y-5 p-6 sm:grid-cols-2 lg:grid-cols-4">
+        <dl className="grid gap-x-7 gap-y-6 bg-slate-50/50 p-6 sm:grid-cols-2 lg:grid-cols-4">
           <InfoItem label="대표자" value={profile.representative_name} />
           <InfoItem label="회사 구분" value={companyTypeLabels[profile.company_type] ?? "-"} />
           <InfoItem label="설립일" value={profile.established_date ?? "-"} />
@@ -211,7 +219,7 @@ export default function CompanyProfile() {
         </dl>
       </section>
 
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 bg-slate-50/70 px-6 py-4">
           <h2 className="text-base font-bold text-slate-950">사업 역량</h2>
           <p className="mt-1 text-sm text-slate-500">회사의 사업 분야와 입찰 수행 역량입니다.</p>
@@ -235,7 +243,7 @@ export default function CompanyProfile() {
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 bg-slate-50/70 px-6 py-4">
           <h2 className="text-base font-bold text-slate-950">참가 자격 및 수행 실적</h2>
           <p className="mt-1 text-sm text-slate-500">입찰 자격과 사업 경험을 확인할 수 있는 정보입니다.</p>
@@ -278,7 +286,7 @@ export default function CompanyProfile() {
 
       <CompanyDocuments />
 
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 bg-slate-50/70 px-6 py-4">
           <h2 className="text-base font-bold text-slate-950">희망 입찰 조건</h2>
           <p className="mt-1 text-sm text-slate-500">공고 검색과 추천에 사용하는 조건입니다.</p>
@@ -293,14 +301,12 @@ export default function CompanyProfile() {
             <TagList color="green" items={splitTags(profile.preferred_region)} />
           </div>
           <div className="md:col-span-2">
-            <h3 className="mb-3 text-xs font-semibold text-slate-500">제외 키워드</h3>
-            <TagList color="slate" items={splitTags(profile.excluded_keywords)} />
+            <h3 className="mb-3 text-xs font-semibold text-red-600">제외 키워드</h3>
+            <TagList color="red" items={splitTags(profile.excluded_keywords)} />
           </div>
         </div>
-        <dl className="grid gap-5 border-t border-slate-200 bg-slate-50/40 px-6 py-5 sm:grid-cols-3">
+        <dl className="border-t border-slate-200 bg-slate-50/40 px-6 py-5">
           <InfoItem label="공고 유형" value={bidTypeLabels[profile.preferred_bid_type] ?? "전체"} />
-          <InfoItem label="최소 공고 금액" value={formatAmount(profile.min_bid_amount)} />
-          <InfoItem label="최대 공고 금액" value={formatAmount(profile.max_bid_amount)} />
         </dl>
       </section>
 

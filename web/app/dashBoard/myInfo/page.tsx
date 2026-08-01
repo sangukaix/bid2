@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 const plans = [
   { name: "Free", price: "0원", analysis: "월 3회", proposal: "제공 안 함", chat: "기본 AI 채팅" },
@@ -9,16 +9,21 @@ const plans = [
   { name: "Pro", price: "월 50,000원", analysis: "월 100회", proposal: "월 10회", chat: "고용량 AI 채팅" },
 ];
 
+function subscribeToAuth(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  return () => window.removeEventListener("storage", onChange);
+}
+
+function getAuthSnapshot() {
+  return Boolean(localStorage.getItem("auth_token"));
+}
+
 export default function MyInfoPage() { // /dashBoard/myInfo 주소에서 보이는 결제 정보 페이지
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>();
-
-  useEffect(() => {
-    setIsLoggedIn(Boolean(localStorage.getItem("auth_token"))); // 브라우저의 로그인 Token 확인
-  }, []);
-
-  if (isLoggedIn === undefined) {
-    return <p className="text-sm text-slate-500">결제 정보를 불러오는 중입니다.</p>;
-  }
+  const isLoggedIn = useSyncExternalStore(
+    subscribeToAuth,
+    getAuthSnapshot,
+    () => false,
+  ); // localStorage 로그인 상태를 React 방식으로 읽음
 
   if (!isLoggedIn) {
     return (

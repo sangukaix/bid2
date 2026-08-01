@@ -20,6 +20,8 @@ export default async function BidListPage({ searchParams }: PageProps) { // /das
     deadline_days: firstValue(values.deadline_days),
     deadline_status: firstValue(values.deadline_status),
     deadline_sort: firstValue(values.deadline_sort) as "asc" | "desc" | undefined,
+    notice_sort: firstValue(values.notice_sort) as "asc" | "desc" | undefined,
+    contract_method: firstValue(values.contract_method) as BidSearchParams["contract_method"],
     page: firstValue(values.page),
   };
 

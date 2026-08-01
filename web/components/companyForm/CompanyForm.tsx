@@ -22,8 +22,6 @@ const nullableFields = new Set([
   "employee_count",
   "capital",
   "annual_revenue",
-  "min_bid_amount",
-  "max_bid_amount",
 ]); // 빈 문자열 대신 null을 보내야 하는 Django 필드
 
 type CompanyFormProps = {
@@ -185,7 +183,7 @@ export default function CompanyForm({ initialProfile, onCancel, onSaved }: Compa
         <PerformanceFields initialValue={initialProfile?.past_performance} />
       </FormSection>
 
-      <CompanyDocuments />
+      {isEditing && <CompanyDocuments editable />}
 
       <FormSection title="희망 입찰 조건" description="찾고 싶은 입찰공고의 기준을 입력해주세요.">
         <div className="md:col-span-2">
@@ -206,7 +204,7 @@ export default function CompanyForm({ initialProfile, onCancel, onSaved }: Compa
           />
         </div>
 
-        <div className="grid gap-4 md:col-span-2 md:grid-cols-3"> {/* 공고 유형과 금액 조건을 한 줄에 배치 */}
+        <div className="md:col-span-2 md:max-w-sm">
           <label className="block">
             <span className="text-sm font-semibold text-slate-800">공고 유형</span>
             <select className={selectClassName} defaultValue={initialProfile?.preferred_bid_type ?? ""} name="preferred_bid_type">
@@ -216,9 +214,6 @@ export default function CompanyForm({ initialProfile, onCancel, onSaved }: Compa
               <option value="construction">공사</option>
             </select>
           </label>
-
-          <WonInput defaultValue={initialProfile?.min_bid_amount} label="최소 공고 금액" name="min_bid_amount" placeholder="예: 10,000,000" />
-          <WonInput defaultValue={initialProfile?.max_bid_amount} label="최대 공고 금액" name="max_bid_amount" placeholder="예: 100,000,000" />
         </div>
 
         <div className="md:col-span-2">

@@ -5,6 +5,8 @@ export interface BidNotice { // 입찰공고 한 건의 데이터 형태를 정�
   bidNtceNm: string; // 입찰공고 이름
   bsnsDivNm: string; // 업무 구분
   cntrctCnclsMthdNm: string; // 계약 방법
+  ntceInsttNm?: string; // 공고기관
+  dminsttNm?: string; // 수요기관
   bidNtceDate: string; // 공고 날짜
   bidClseDate: string; // 입찰 마감 날짜
   bidClseTm: string; // 입찰 마감 시간
@@ -23,66 +25,107 @@ export interface BidNotice { // 입찰공고 한 건의 데이터 형태를 정�
   hasChat?: boolean; // 이 공고에서 저장된 AI 채팅이 있는지 여부
   hasAnalysis?: boolean; // 이 공고에서 저장된 AI 분석이 있는지 여부
   hasProposal?: boolean; // 이 공고에서 생성한 맞춤형 제안서가 있는지 여부
+  hasProposalProject?: boolean; // 제안서 만들기를 눌러 프로젝트를 시작했는지 여부
+  proposalProjectStartedAt?: string | null; // 프로젝트 번호를 정하는 시작 시간
 }
-
-export type ProposalSourceDocument = {
-  id: number;
-  original_name: string;
-  target_company: string;
-  uploaded_at: string;
-};
 
 export type ProposalStrategy = {
   bid_summary: string;
   client_needs: string[];
+  core_value_proposition: string;
   win_themes: string[];
   differentiators: string[];
   company_strengths: string[];
   gaps_and_mitigations: string[];
 };
 
-export type ProposalSection = {
+export type ProposalTextChange = {
+  target: string;
+  content_label?: string;
+  summary?: string;
+  before?: string;
+  after?: string;
+  reason?: string;
+};
+
+export type ProposalRevisionLog = {
+  source_slide_number: number | null;
+  output_slide_number: number | null;
+  action: "UPDATE" | "REMOVE" | "REVIEW" | "ADD";
   title: string;
-  purpose: string;
-  content: string;
-  key_points: string[];
-  company_evidence: string[];
-  source_numbers: number[];
+  reason: string;
+  changes: ProposalTextChange[];
+  warnings: string[];
 };
 
 export type BidProposalData = {
   id: number;
-  output_format: "docx" | "pptx";
-  template_mode: "original_theme" | "content_reference";
-  source_document: {
-    id: number | null;
-    original_name: string;
-    target_company: string;
-    uploaded_at: string | null;
-  };
+  status: "draft" | "final" | "generating";
+  output_format: "pptx";
+  template_mode: "default_template";
   strategy: ProposalStrategy;
-  draft: {
-    proposal_title: string;
-    subtitle: string;
-    executive_summary: string;
-    sections: ProposalSection[];
-    final_checklist: string[];
+  revision_plan: {
+    version?: string;
+    template_id?: string;
+    template_name?: string;
+    summary?: string;
+    source_slide_count?: number;
+    output_slide_count?: number;
+    reviewed_slide_count?: number;
+    revision_log?: ProposalRevisionLog[];
+    final_review_items?: string[];
+    quality_review?: {
+      passed: boolean;
+      unresolved_placeholders: Array<{
+        slide_number: number;
+        marker: string;
+      }>;
+      empty_slide_numbers: number[];
+      apply_warnings: Array<{
+        slide_number: number | null;
+        message: string;
+      }>;
+      review_items: string[];
+    };
+    feedback_history?: Array<{
+      instruction: string;
+      slide_number: number | null;
+      summary: string;
+      created_at: string;
+    }>;
     document_processing?: {
       processed_files: string[];
       failed_files: Array<{ file_name: string; reason: string }>;
       chunk_count: number;
-      company_intro_files?: string[];
-      company_intro_failures?: Array<{ file_name: string; reason: string }>;
+      company_knowledge_item_count?: number;
+      company_knowledge_processed_files?: string[];
+      company_knowledge_reused_files?: string[];
+      company_knowledge_failed_files?: Array<{
+        file_name: string;
+        reason: string;
+      }>;
     };
   };
   created_at: string;
   updated_at: string;
+  preview_url: string;
   download_url: string;
+};
+
+export type ProposalTemplateOption = {
+  id: string;
+  name: string;
+  description: string;
+  available: boolean;
+  target_slides: number;
+  slide_count: number;
+  preview_url: string;
 };
 
 export type BidProposalResponse = {
   proposal: BidProposalData | null;
-  source_documents?: ProposalSourceDocument[];
+  templates?: ProposalTemplateOption[];
+  selected_template_id?: string;
 };
 
 export interface BidSummaryData {
@@ -130,5 +173,7 @@ export interface BidSearchParams {
   deadline_days?: string;
   deadline_status?: string;
   deadline_sort?: "asc" | "desc";
+  notice_sort?: "asc" | "desc";
+  contract_method?: "제한경쟁" | "수의계약" | "일반경쟁";
   page?: string;
 }

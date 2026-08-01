@@ -80,7 +80,13 @@ function statusLabel(item: EvaluationItem) {
     : "공고문 확인 필요";
 }
 
-export default function BidAnalysisReport({ bidNtceNo }: { bidNtceNo: string }) {
+export default function BidAnalysisReport({
+  bidNtceNo,
+  backHref = "/dashBoard/matchBid/analysis",
+}: {
+  bidNtceNo: string;
+  backHref?: string;
+}) {
   const [bid, setBid] = useState<BidNotice | null>(null);
   const [report, setReport] = useState<AnalysisReport | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
@@ -170,7 +176,7 @@ export default function BidAnalysisReport({ bidNtceNo }: { bidNtceNo: string }) 
     <div className="mt-6 space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
-          <Link className="text-sm font-semibold text-blue-600 hover:text-blue-700" href="/dashBoard/matchBid">← 저장 공고 목록</Link>
+          <Link className="text-sm font-semibold text-blue-600 hover:text-blue-700" href={backHref}>← 성공률 분석</Link>
           <h2 className="mt-3 max-w-4xl text-xl font-bold leading-8 text-slate-950">{bid.bidNtceNm}</h2>
           <p className="mt-1 text-sm text-slate-500">{bid.bidNtceNo} · {bid.bsnsDivNm || "구분 확인 필요"}</p>
         </div>
@@ -184,8 +190,8 @@ export default function BidAnalysisReport({ bidNtceNo }: { bidNtceNo: string }) 
 
       {!report ? (
         <section className="rounded-lg border border-blue-200 bg-blue-50 px-6 py-10 text-center">
-          <h3 className="text-lg font-bold text-blue-950">AI 입찰 적합도 분석</h3>
-          <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-blue-800">사업 공고에 첨부된 공고문, 제안요청서, 과업지시서 등의 문서를 검토하고 최종 참가 가능성을 제시합니다.</p>
+          <h3 className="text-lg font-bold text-blue-950">성공률 분석</h3>
+          <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-blue-800">공고 문서와 회사 정보를 비교해 참가 가능성과 준비 사항을 진단합니다. 결과 점수는 낙찰 확률 예측이 아니라 공고 적합도입니다.</p>
           <button className="mt-6 rounded-md bg-blue-600 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-blue-300" disabled={isAnalyzing} onClick={runAnalysis} type="button">
             {isAnalyzing ? "문서를 확인하고 분석하는 중..." : "AI 분석 시작"}
           </button>
@@ -196,7 +202,7 @@ export default function BidAnalysisReport({ bidNtceNo }: { bidNtceNo: string }) 
           <section className="rounded-lg border border-slate-200 bg-white">
             <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-5">
               <div>
-                <p className="text-xs font-semibold text-blue-600">입찰 적합도</p>
+                <p className="text-xs font-semibold text-blue-600">공고 적합도</p>
                 <div className="mt-1 flex items-end gap-3"><strong className="text-3xl text-slate-950">{report.fit_score}점</strong><span className="pb-1 text-sm font-semibold text-slate-600">{report.recommendation}</span></div>
               </div>
               <div className="flex items-center gap-3">

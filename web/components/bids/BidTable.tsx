@@ -36,6 +36,15 @@ function getDeadlineParts(bid: BidNotice) {
 }
 
 
+function formatNoticeDate(bid: BidNotice) {
+  return bid.bidNtceDate ? bid.bidNtceDate.replaceAll("-", ".") : "-";
+}
+
+function formatNoticeOrganization(bid: BidNotice) {
+  return bid.ntceInsttNm || bid.dminsttNm || "확인 필요";
+}
+
+
 function formatAllowedRegion(bid: BidNotice) {
   return bid.regionLimit ? bid.allowedRegion || "확인 필요" : "전국";
 }
@@ -89,7 +98,7 @@ function pageHref(filters: BidSearchParams, page: number) {
 
 function filterHref(
   filters: BidSearchParams,
-  key: "deadline_sort",
+  key: "deadline_sort" | "notice_sort" | "contract_method",
   value: string,
 ) {
   const params = new URLSearchParams();
@@ -147,8 +156,22 @@ export default function BidTable({ data, error, filters }: BidTableProps) { // �
                 공고명
               </th>
 
-              <th className="w-28 whitespace-nowrap px-4 py-3 font-semibold" scope="col">
-                계약 방법
+              <th className="w-36 whitespace-nowrap px-4 py-3 font-semibold" scope="col">
+                <label className={`relative inline-flex cursor-pointer items-center gap-1 ${filters.contract_method ? "text-blue-600" : ""}`}>
+                  <span>공고기관</span>
+                  <span aria-hidden="true" className="text-xs">▾</span>
+                  <select
+                    aria-label="계약방법 필터"
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                    onChange={(event) => router.push(filterHref(filters, "contract_method", event.target.value))}
+                    value={filters.contract_method ?? ""}
+                  >
+                    <option value="">전체</option>
+                    <option value="제한경쟁">제한경쟁</option>
+                    <option value="수의계약">수의계약</option>
+                    <option value="일반경쟁">일반경쟁</option>
+                  </select>
+                </label>
               </th>
 
               <th className="w-32 whitespace-nowrap px-4 py-3 font-semibold" scope="col">
@@ -156,7 +179,20 @@ export default function BidTable({ data, error, filters }: BidTableProps) { // �
               </th>
 
               <th className="w-28 whitespace-nowrap px-4 py-3 font-semibold" scope="col">
-                공고일
+                <label className={`relative inline-flex cursor-pointer items-center gap-1 ${filters.notice_sort ? "text-blue-600" : ""}`}>
+                  <span>공고일</span>
+                  <span aria-hidden="true" className="text-xs">▾</span>
+                  <select
+                    aria-label="공고일 정렬"
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                    onChange={(event) => router.push(filterHref(filters, "notice_sort", event.target.value))}
+                    value={filters.notice_sort ?? ""}
+                  >
+                    <option value="">기본순</option>
+                    <option value="asc">빠른순</option>
+                    <option value="desc">느린순</option>
+                  </select>
+                </label>
               </th>
 
               <th className="w-28 whitespace-nowrap px-4 py-3 font-semibold" scope="col">
@@ -235,8 +271,10 @@ export default function BidTable({ data, error, filters }: BidTableProps) { // �
 
                 </td>
 
-                <td className="whitespace-nowrap px-4 py-4 text-slate-600">
-                  {bid.cntrctCnclsMthdNm} {/* 계약 방법 */}
+                <td className="max-w-36 px-4 py-4 text-slate-600">
+                  <span className="line-clamp-2" title={formatNoticeOrganization(bid)}>
+                    {formatNoticeOrganization(bid)}
+                  </span>
                 </td>
 
                 <td className="whitespace-nowrap px-4 py-4 text-slate-600">
@@ -244,7 +282,7 @@ export default function BidTable({ data, error, filters }: BidTableProps) { // �
                 </td>
 
                 <td className="whitespace-nowrap px-4 py-4 text-slate-600">
-                  {bid.bidNtceDate} {/* 공고 날짜 */}
+                  {formatNoticeDate(bid)} {/* 공고 날짜 */}
                 </td>
 
                 <td className="whitespace-nowrap px-4 py-4 text-slate-600">
@@ -273,7 +311,7 @@ export default function BidTable({ data, error, filters }: BidTableProps) { // �
         </table>
       </div>
 
-      {data && data.total_pages > 1 && (
+      {data && (
         <nav
           aria-label="입찰공고 페이지"
           className="flex flex-wrap items-center justify-center gap-1.5 border-t border-slate-200 px-5 py-4"

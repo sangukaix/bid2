@@ -5,6 +5,9 @@ export default function MyCompanyInfoPage() { // /dashBoard/myCompanyInfo 주소
     <section className="min-w-0"> {/* 다른 대시보드 페이지와 같은 본문 너비 사용 */}
       <div className="border-b border-slate-200 pb-6"> {/* 페이지 제목 영역 */}
         <h1 className="text-2xl font-bold">회사정보</h1>
+        <p className="mt-2 text-xs text-slate-500">
+          <span className="font-semibold text-red-500">*</span> 표시는 필수입니다.
+        </p>
       </div>
 
       <CompanyProfile /> {/* 저장 정보가 있으면 요약, 없으면 입력 폼 표시 */}
